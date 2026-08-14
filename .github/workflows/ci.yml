@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11", "3.13"]
+        exclude:
+          # One Python per non-Linux runner is enough to catch path handling.
+          - os: macos-latest
+            python-version: "3.11"
+          - os: windows-latest
+            python-version: "3.11"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[watch,dev]"
+
+      # No Ollama here on purpose. The suite uses a deterministic fake embedder
+      # and stubs retrieval, so it tests sift's own logic rather than a model.
+      - name: Test
+        run: pytest -q
+
+      - name: Smoke-test the CLI
+        run: |
+          sift --version
+          sift --help

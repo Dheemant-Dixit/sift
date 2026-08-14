@@ -1,0 +1,16 @@
+# Resident watcher. Install to ~/.config/systemd/user/ and:
+#   systemctl --user enable --now sift-watch.service
+# Replace /PATH/TO/sift with the output of `which sift`.
+
+[Unit]
+Description=sift — keep the Downloads index fresh
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/PATH/TO/sift watch
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

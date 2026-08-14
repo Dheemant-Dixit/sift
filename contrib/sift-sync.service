@@ -1,0 +1,8 @@
+# One-shot sync, driven by sift-sync.timer. Replace /PATH/TO/sift.
+
+[Unit]
+Description=sift — sync the Downloads index once
+
+[Service]
+Type=oneshot
+ExecStart=/PATH/TO/sift index

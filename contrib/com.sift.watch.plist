@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Resident watcher: keeps `sift watch` alive, re-indexing shortly after a
+  download lands. Replace /PATH/TO/sift with the output of `which sift`.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sift.watch</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/PATH/TO/sift</string>
+        <string>watch</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/sift.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/sift.log</string>
+</dict>
+</plist>

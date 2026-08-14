@@ -1,0 +1,20 @@
+# virtualenvs
+.venv/
+venv/
+
+# the index — contains the VERBATIM TEXT of your documents. never commit this.
+data/
+
+# secrets
+.env
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+dist/
+build/
+
+# os
+.DS_Store

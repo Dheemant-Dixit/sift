@@ -1,0 +1,402 @@
+"""
+The command line.
+
+Presentation lives here and only here. Every module underneath returns data —
+`Answer`, `FileHit`, `SyncStats`, `Check` — so that sift is usable as a library
+without having to parse text that was formatted for a terminal.
+"""
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from datetime import datetime
+from pathlib import Path
+
+from sift import __version__
+from sift.config import ConfigError, configure, get_settings
+from sift.store import IndexProblem
+
+# --- small formatting helpers ---------------------------------------------
+
+def human_size(num_bytes: int) -> str:
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}GB"
+
+
+def human_age(timestamp: float) -> str:
+    delta = datetime.now() - datetime.fromtimestamp(timestamp)
+    days = delta.days
+    if days == 0:
+        hours = delta.seconds // 3600
+        return "just now" if hours == 0 else f"{hours}h ago"
+    if days == 1:
+        return "yesterday"
+    if days < 30:
+        return f"{days}d ago"
+    if days < 365:
+        return f"{days // 30}mo ago"
+    return f"{days // 365}y ago"
+
+
+# --- commands --------------------------------------------------------------
+
+def cmd_find(args) -> int:
+    from sift.doctor import preflight
+    from sift.find import find_files
+    from sift.open_file import open_file, reveal_file
+
+    settings = get_settings()
+    preflight(settings, need_models=False)  # filename matching works without a model
+
+    if not args.no_sync:
+        _quiet_sync(settings)
+
+    hits = find_files(args.query, limit=args.limit, recent_first=args.recent, settings=settings)
+    if not hits:
+        print(f"Nothing matched {args.query!r} in {settings.source_dir}.")
+        print("  Try fewer or more general words, or run `sift status` to see what's indexed.")
+        return 1
+
+    for i, hit in enumerate(hits, 1):
+        marker = {"content": "·", "filename": "name", "both": "·+name"}[hit.matched_on]
+        print(f"\n{i:>2}. {hit.name}")
+        print(f"    {human_size(hit.size)} · {human_age(hit.modified)} · "
+              f"{hit.score:.2f} {marker}")
+        print(f"    {hit.path}")
+        if hit.snippet:
+            print(f"    “{hit.snippet}”")
+        elif hit.note:
+            print(f"    ({hit.note})")
+        if hit.duplicates:
+            print(f"    +{len(hit.duplicates)} identical copy(ies): "
+                  f"{', '.join(Path(d).name for d in hit.duplicates)}")
+
+    target = args.open or args.reveal
+    if target:
+        if not 1 <= target <= len(hits):
+            print(f"\nNo result number {target}.", file=sys.stderr)
+            return 1
+        hit = hits[target - 1]
+        print(f"\n{'Revealing' if args.reveal else 'Opening'} {hit.name} ...")
+        (reveal_file if args.reveal else open_file)(hit.path)
+    return 0
+
+
+def cmd_ask(args) -> int:
+    from sift.doctor import preflight
+    from sift.generate import answer
+
+    settings = get_settings()
+    preflight(settings)
+    if not args.no_sync:
+        _quiet_sync(settings)
+
+    def respond(question: str) -> None:
+        result = answer(question, top_k=args.top_k, min_score=args.min_score, settings=settings)
+        print(f"\n{result.text}")
+        if result.chunks:
+            print("\n— retrieved from —")
+            for chunk in result.chunks:
+                print(f"  • {chunk['filename']} (chunk {chunk['chunk_index']}, "
+                      f"score {chunk['score']:.2f})")
+
+    if args.question:
+        respond(" ".join(args.question))
+        return 0
+
+    print(f"Ask {settings.source_dir} anything (Ctrl-C or 'quit' to exit).")
+    while True:
+        try:
+            question = input("\n> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if question.lower() in {"quit", "exit", ""}:
+            return 0
+        respond(question)
+
+
+def cmd_index(args) -> int:
+    from sift.doctor import preflight
+    from sift.index import rebuild_index, update_index
+
+    settings = get_settings()
+    preflight(settings)
+
+    logging.getLogger("sift").setLevel(logging.INFO)
+    if args.rebuild:
+        print(f"Rebuilding index of {settings.source_dir} from scratch ...")
+        stats = rebuild_index(settings)
+    else:
+        print(f"Syncing index of {settings.source_dir} ...")
+        stats = update_index(settings)
+
+    if stats.changed:
+        print(f"  +{stats.added} added, ~{stats.modified} modified, -{stats.deleted} deleted")
+    else:
+        print("  nothing changed")
+    print(f"  {stats.chunks_total} chunks across {stats.files_total} files "
+          f"({stats.seconds}s)")
+    if stats.duplicates:
+        print(f"  {stats.duplicates} duplicate file(s) collapsed")
+    if stats.skipped:
+        print(f"  {stats.skipped} file(s) skipped — see `sift status --skipped`")
+    if stats.deferred:
+        print(f"  {stats.deferred} file(s) still downloading — run again shortly")
+    return 0
+
+
+def cmd_watch(args) -> int:
+    from sift.doctor import preflight
+    from sift.watch import watch
+
+    settings = get_settings()
+    preflight(settings)
+    logging.getLogger("sift").setLevel(logging.INFO)
+    watch(settings)
+    return 0
+
+
+def cmd_status(args) -> int:
+    from sift.index import Manifest
+    from sift.store import VectorStore
+
+    settings = get_settings()
+    manifest = Manifest.load(settings=settings)
+
+    print(f"source     {settings.source_dir}")
+    print(f"index      {settings.data_dir}")
+    print(f"models     {settings.embed_model} (embed) · {settings.chat_model} (chat)")
+    print(f"privacy    {'LOCAL — nothing leaves this machine' if not settings.uses_cloud() else 'CLOUD models in use'}")
+
+    if not settings.index_path.exists():
+        print("\nNo index yet. Build one with: sift index")
+        return 0
+
+    try:
+        store = VectorStore.load(settings=settings)
+    except IndexProblem as e:
+        print(f"\n! {e}")
+        return 1
+
+    size_mb = settings.index_path.stat().st_size / 1024 / 1024
+    print(f"\n{len(store)} chunks from {len(manifest.files)} files ({size_mb:.1f}MB)")
+    if manifest.updated_at:
+        print(f"last synced {human_age(manifest.updated_at)}")
+
+    empty = [p for p, e in manifest.files.items() if not e.get("num_chunks")]
+    if empty:
+        print(f"\n{len(empty)} file(s) had no extractable text (findable by name only):")
+        for path in sorted(empty)[:10]:
+            print(f"  · {Path(path).name}")
+        if len(empty) > 10:
+            print(f"  ... and {len(empty) - 10} more")
+
+    if manifest.duplicates:
+        print(f"\n{len(manifest.duplicates)} duplicate file(s) collapsed")
+
+    if args.skipped and manifest.skipped:
+        print(f"\n{len(manifest.skipped)} file(s) skipped:")
+        for path, reason in sorted(manifest.skipped.items()):
+            print(f"  · {Path(path).name} — {reason}")
+    elif manifest.skipped:
+        print(f"\n{len(manifest.skipped)} file(s) skipped (see --skipped)")
+    return 0
+
+
+def cmd_doctor(args) -> int:
+    from sift.doctor import FAIL, OK, run_checks
+
+    settings = get_settings()
+    symbols = {OK: "ok  ", "warn": "warn", FAIL: "FAIL"}
+    worst_failed = False
+    for check in run_checks(settings):
+        print(f"[{symbols[check.status]}] {check.name}: {check.detail}")
+        if check.fix:
+            print(f"         → {check.fix}")
+        worst_failed |= check.failed
+    return 1 if worst_failed else 0
+
+
+def cmd_search(args) -> int:
+    """Raw chunk-level hits. The tool for calibrating --min-score."""
+    from sift.doctor import preflight
+    from sift.retrieve import search
+
+    settings = get_settings()
+    preflight(settings)
+    hits = search(args.query, top_k=args.top_k, settings=settings)
+    if not hits:
+        print("No chunks in the index. Run: sift index")
+        return 1
+    print(f"\nQuery: {args.query!r}\n")
+    for hit in hits:
+        preview = " ".join(hit["text"].split())[:180]
+        print(f"  #{hit['rank']}  score={hit['score']:.3f}  {hit['filename']} "
+              f"[chunk {hit['chunk_index']}]")
+        print(f"      {preview}...\n")
+    return 0
+
+
+def cmd_purge(args) -> int:
+    from sift.index import purge_index
+
+    settings = get_settings()
+    if not args.yes:
+        print(f"This deletes sift's index in {settings.data_dir}.")
+        print("Your documents are not touched. Re-run with --yes to confirm.")
+        return 1
+    removed = purge_index(settings)
+    if not removed:
+        print("Nothing to delete.")
+    for path in removed:
+        print(f"deleted {path}")
+    return 0
+
+
+def _quiet_sync(settings) -> None:
+    """Bring the index up to date before a query, without narrating it.
+
+    Cheap by design: when nothing changed, the manifest proves it in well under
+    a second, so the alternative — answering from a stale index — isn't worth
+    the time it saves.
+    """
+    from sift.index import update_index
+
+    try:
+        update_index(settings)
+    except (ConfigError, IndexProblem):
+        raise
+    except Exception as e:
+        print(f"  ! could not refresh the index ({type(e).__name__}: {e}) — "
+              f"using what's there", file=sys.stderr)
+
+
+# --- argument parsing ------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="sift",
+        description="Ask your Downloads folder where a file is — and what it says.",
+        epilog="Everything runs locally by default. Run `sift doctor` if something looks wrong.",
+    )
+    parser.add_argument("--version", action="version", version=f"sift {__version__}")
+
+    # Settings flags shared by every subcommand. Defaults are None so that
+    # "not passed" is distinguishable from "passed the default value" — only
+    # what the user actually typed is allowed to override the environment.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--source", type=Path, metavar="DIR",
+                        help="folder to search (default: your Downloads)")
+    common.add_argument("--data-dir", type=Path, metavar="DIR",
+                        help="where to keep the index")
+    common.add_argument("--embed-model", metavar="MODEL")
+    common.add_argument("--chat-model", metavar="MODEL")
+    common.add_argument("--chunk-size", type=int, metavar="N")
+    common.add_argument("--chunk-overlap", type=int, metavar="N")
+    common.add_argument("--max-file-mb", type=int, metavar="N")
+    common.add_argument("--allow-cloud", action="store_true", default=None,
+                        help="permit non-local models (sends document text to the provider)")
+    common.add_argument("-v", "--verbose", action="store_true")
+    common.add_argument("-q", "--quiet", action="store_true")
+
+    subparsers = parser.add_subparsers(dest="command", metavar="<command>")
+
+    p_find = subparsers.add_parser(
+        "find", parents=[common], help="find files by what they contain or are called",
+        description="Rank files by content and filename. Works on files whose text "
+                    "couldn't be extracted, too — those match by name.")
+    p_find.add_argument("query", help="what you're looking for")
+    p_find.add_argument("-n", "--limit", type=int, default=10, help="how many results (default 10)")
+    p_find.add_argument("--recent", action="store_true",
+                        help="favor recently modified files")
+    p_find.add_argument("--open", type=int, metavar="N", help="open result N")
+    p_find.add_argument("--reveal", type=int, metavar="N", help="show result N in the file manager")
+    p_find.add_argument("--no-sync", action="store_true", help="skip the pre-query index refresh")
+    p_find.set_defaults(func=cmd_find)
+
+    p_ask = subparsers.add_parser(
+        "ask", parents=[common], help="ask a question answered from your files",
+        description="Retrieve the most relevant passages and answer from them only. "
+                    "If nothing is relevant enough, no model is called at all.")
+    p_ask.add_argument("question", nargs="*", help="your question (omit for interactive mode)")
+    p_ask.add_argument("--top-k", type=int, help="passages to consider")
+    p_ask.add_argument("--min-score", type=float, help="relevance bar (default 0.55)")
+    p_ask.add_argument("--no-sync", action="store_true", help="skip the pre-query index refresh")
+    p_ask.set_defaults(func=cmd_ask)
+
+    p_index = subparsers.add_parser("index", parents=[common], help="build or refresh the index")
+    p_index.add_argument("--rebuild", action="store_true",
+                         help="re-embed everything from scratch (needed after changing models)")
+    p_index.set_defaults(func=cmd_index)
+
+    p_watch = subparsers.add_parser("watch", parents=[common],
+                                    help="keep the index fresh as the folder changes")
+    p_watch.set_defaults(func=cmd_watch)
+
+    p_status = subparsers.add_parser("status", parents=[common], help="what's indexed right now")
+    p_status.add_argument("--skipped", action="store_true", help="list every skipped file")
+    p_status.set_defaults(func=cmd_status)
+
+    p_doctor = subparsers.add_parser("doctor", parents=[common],
+                                     help="check the setup and say how to fix it")
+    p_doctor.set_defaults(func=cmd_doctor)
+
+    p_search = subparsers.add_parser(
+        "search", parents=[common], help="raw passage hits with scores (for tuning)",
+        description="Shows the unfiltered retrieval scores. Use it to calibrate "
+                    "--min-score for your own documents — see the README.")
+    p_search.add_argument("query")
+    p_search.add_argument("--top-k", type=int, default=10)
+    p_search.set_defaults(func=cmd_search)
+
+    p_purge = subparsers.add_parser("purge", parents=[common],
+                                    help="delete the index (your files are untouched)")
+    p_purge.add_argument("--yes", action="store_true", help="confirm")
+    p_purge.set_defaults(func=cmd_purge)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if not getattr(args, "command", None):
+        parser.print_help()
+        return 0
+
+    level = logging.WARNING
+    if getattr(args, "verbose", False):
+        level = logging.DEBUG
+    elif getattr(args, "quiet", False):
+        level = logging.ERROR
+    logging.basicConfig(level=level, format="%(message)s")
+
+    try:
+        configure(
+            source_dir=args.source,
+            data_dir=args.data_dir,
+            embed_model=args.embed_model,
+            chat_model=args.chat_model,
+            chunk_size=args.chunk_size,
+            chunk_overlap=args.chunk_overlap,
+            max_file_mb=args.max_file_mb,
+            allow_cloud=args.allow_cloud,
+        )
+        return args.func(args)
+    except (ConfigError, IndexProblem) as e:
+        print(f"\n{e}\n", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print()
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

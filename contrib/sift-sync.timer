@@ -1,0 +1,13 @@
+# Periodic sync without a resident process. Install alongside
+# sift-sync.service and:  systemctl --user enable --now sift-sync.timer
+
+[Unit]
+Description=sift — sync the Downloads index periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

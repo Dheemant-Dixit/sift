@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  No resident process: launchd watches the folder itself and runs a one-shot
+  `sift index` whenever it changes. Cheaper than the watcher, slightly less
+  immediate. Replace /PATH/TO/sift and /PATH/TO/Downloads.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sift.sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/PATH/TO/sift</string>
+        <string>index</string>
+    </array>
+
+    <key>WatchPaths</key>
+    <array>
+        <string>/PATH/TO/Downloads</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/sift.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/sift.log</string>
+</dict>
+</plist>
