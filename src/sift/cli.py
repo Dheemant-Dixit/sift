@@ -243,6 +243,18 @@ def cmd_search(args) -> int:
     return 0
 
 
+def cmd_ui(args) -> int:
+    from sift.doctor import preflight
+    from sift.ui import run
+
+    settings = get_settings()
+    # need_models=False: the session is still useful with Ollama down — finding
+    # files by name needs no model at all, and the failure is reported per-query
+    # rather than refusing to start.
+    preflight(settings, need_models=False)
+    return run(settings)
+
+
 def cmd_purge(args) -> int:
     from sift.index import purge_index
 
@@ -360,12 +372,44 @@ def build_parser() -> argparse.ArgumentParser:
     p_purge.add_argument("--yes", action="store_true", help="confirm")
     p_purge.set_defaults(func=cmd_purge)
 
+    p_ui = subparsers.add_parser(
+        "ui", parents=[common], help="interactive session (also: just run `sift`)",
+        description="Search and ask in one place, with results scrolling into "
+                    "your terminal history and a prompt pinned at the bottom.")
+    p_ui.set_defaults(func=cmd_ui)
+
     return parser
+
+
+# Every subcommand name, used to tell `sift find x` from `sift --source /x`.
+COMMANDS = frozenset({"find", "ask", "index", "watch", "status", "doctor",
+                      "search", "purge", "ui"})
+
+
+def with_default_command(argv: list[str], interactive: bool = True) -> list[str]:
+    """Make a bare `sift` (or `sift --source ...`) start the interactive session.
+
+    Only a leading FLAG is treated as "no command given". A leading word that
+    isn't a command stays untouched, so a typo gets argparse's list of valid
+    choices instead of a baffling error from inside `ui`.
+
+    `interactive` is False when stdin isn't a terminal. A bare `sift` in a
+    script or a pipe then falls through to the help text, rather than starting
+    a session with nobody to type into it.
+    """
+    if argv and argv[0] in ("-h", "--help", "--version"):
+        return argv
+    if argv and not argv[0].startswith("-"):
+        return argv
+    if not interactive:
+        return argv
+    return ["ui", *argv]
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(with_default_command(argv, sys.stdin.isatty()))
 
     if not getattr(args, "command", None):
         parser.print_help()

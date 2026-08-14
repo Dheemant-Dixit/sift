@@ -32,6 +32,58 @@ Everything runs locally. No API keys, no accounts, nothing uploaded.
 
 ---
 
+## The interactive session
+
+Run `sift` with no arguments and you get a session: results scroll into your
+normal terminal history, a prompt stays pinned at the bottom, and answers stream
+in as the model produces them.
+
+```
+● sift  /Users/you/Downloads
+  ollama_chat/llama3.1:8b · local
+  type to search · ?question to ask · /help
+
+> rental agreement
+
+   1. ScannedRentalAgreement.pdf                        0.98 name
+      2.4MB · 3mo ago
+      (no extractable text (scanned or image-only?))
+   2. lease-notes.md                                    0.64 ·
+      217B · 7mo ago
+      # Lease terms The notice period for terminating this lease is 60…
+
+  /open N to open · /reveal N to show in finder
+
+> ?what is the notice period and the deposit
+
+  Notice period: 60 days [lease-notes.md]
+  Security deposit: 100,000 INR, refundable within 30 days [lease-notes.md]
+
+  — from —
+    • lease-notes.md (chunk 0, 0.63)
+
+┌─────────────────────────────────| sift |─────────────────────────────────┐
+│>                                                                         │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+It's **inline, not full-screen** — it never takes over your terminal, so your
+scrollback survives and everything printed stays selectable and copyable after
+you quit.
+
+| In the session | |
+|---|---|
+| `<anything>` | search for it |
+| `?<question>` | ask, answered from your files |
+| `/open N` `/reveal N` | open result N, or show it in your file manager |
+| `/find -r <text>` | search, favouring recent files |
+| `/sync` `/status` `/help` | refresh the index, see what's indexed, list commands |
+| `ctrl-d` | quit |
+
+Each query is answered on its own — there's no conversational memory yet.
+
+---
+
 ## Quickstart
 
 ```bash
@@ -49,7 +101,8 @@ pip install -e ".[watch]"
 sift index
 
 # 4. use it
-sift find "tax return"
+sift                                  # interactive session
+sift find "tax return"                # or one-shot
 sift ask "how much was the security deposit?"
 ```
 
@@ -101,6 +154,7 @@ guarantee.
 
 | Command | |
 |---|---|
+| `sift` / `sift ui` | interactive session (see above) |
 | `sift index` | sync the index (incremental — usually under a second) |
 | `sift index --rebuild` | re-embed everything, needed after changing models |
 | `sift status` | what's indexed, what was skipped and why |
@@ -209,6 +263,8 @@ Read the files in this order:
 | `retrieve.py` | Embedding the query and searching |
 | `find.py` | Chunk hits → ranked *files*; why filenames are scored too |
 | `generate.py` | Grounding the model in retrieved text; the refusal guardrail |
+| `session.py` | What the interactive session *means*, with no terminal involved |
+| `ui.py` | Drawing it: the inline prompt, streaming answers, result layout |
 
 This is a hand-rolled RAG pipeline: no LangChain, no vector database. Search is
 one dot product against a normalized matrix. That's not a limitation to work
@@ -286,6 +342,9 @@ Real ones, not modesty:
 
 ## Roadmap
 
+- Conversational follow-ups in the session ("find my lease" → "what's the notice
+  period?"). The session already records history; only the prompt-building needs
+  to change.
 - Cross-encoder re-ranker as an opt-in second stage (the highest-value fix)
 - OCR for scanned PDFs
 - [LanceDB](https://lancedb.com) as a drop-in store backend — embedded, on-disk,
