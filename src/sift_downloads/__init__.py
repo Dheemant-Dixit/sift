@@ -26,7 +26,7 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 from sift_downloads.config import Settings, configure, get_settings  # noqa: E402
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     "Settings", "configure", "get_settings",

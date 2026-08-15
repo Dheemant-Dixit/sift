@@ -2,9 +2,15 @@
 
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org).
 
-## 0.1.0 — 2026-08-15
+## 0.1.1 — 2026-08-16
 
-First public release.
+First release on PyPI: `pip install sift-downloads`.
+
+(`v0.1.0` was tagged a day earlier but never published. Two claims in it did
+not survive checking — the README said the only network traffic was to
+`localhost`, which was untrue, and it understated the model download as ~2GB
+against a real 5.2GB. Rather than move a tag that was already pushed, the
+corrected code ships as 0.1.1.)
 
 **Find a file, or ask what's in it**
 
