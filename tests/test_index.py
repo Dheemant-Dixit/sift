@@ -17,12 +17,12 @@ import os
 
 import pytest
 
-from sift.config import configure, get_settings
-from sift.index import (Manifest, purge_index, rebuild_index, unlock_file,
-                        update_index)
-from sift.ingest import (REASON_LOCKED, REASON_NO_TEXT, content_key,
-                         is_indexable, scan_source)
-from sift.store import VectorStore
+from sift_downloads.config import configure, get_settings
+from sift_downloads.index import (Manifest, purge_index, rebuild_index,
+                                  unlock_file, update_index)
+from sift_downloads.ingest import (REASON_LOCKED, REASON_NO_TEXT, content_key,
+                                   is_indexable, scan_source)
+from sift_downloads.store import VectorStore
 
 
 # --- what gets scanned -----------------------------------------------------
@@ -218,7 +218,7 @@ def test_sync_survives_an_unreadable_file(make_file, embedder, monkeypatch):
     make_file("good.md", "fine " * 300)
     make_file("bad.md", "also fine " * 300)
 
-    import sift.ingest as ingest
+    import sift_downloads.ingest as ingest
     real = ingest.extract_text_file
 
     def explode(path):

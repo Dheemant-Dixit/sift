@@ -13,7 +13,7 @@ the machinery.
 """
 from __future__ import annotations
 
-from sift.config import Settings, get_settings
+from sift_downloads.config import Settings, get_settings
 
 
 def _best_cut(text: str, start: int, hard_end: int) -> int:

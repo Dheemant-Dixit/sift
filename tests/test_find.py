@@ -11,11 +11,11 @@ import time
 
 import pytest
 
-from sift import find as find_module
-from sift.config import get_settings
-from sift.find import filename_score, find_files, tokenize
-from sift.index import Manifest
-from sift.ingest import REASON_LOCKED, REASON_NO_TEXT
+from sift_downloads import find as find_module
+from sift_downloads.config import get_settings
+from sift_downloads.find import filename_score, find_files, tokenize
+from sift_downloads.index import Manifest
+from sift_downloads.ingest import REASON_LOCKED, REASON_NO_TEXT
 
 
 @pytest.fixture

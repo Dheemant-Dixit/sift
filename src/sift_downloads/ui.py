@@ -26,9 +26,9 @@ from rich.live import Live
 from rich.padding import Padding
 from rich.text import Text
 
-from sift.config import ConfigError, Settings, get_settings
-from sift.session import HELP, Request, Session, UiCommand, parse
-from sift.store import IndexProblem
+from sift_downloads.config import ConfigError, Settings, get_settings
+from sift_downloads.session import HELP, Request, Session, UiCommand, parse
+from sift_downloads.store import IndexProblem
 
 log = logging.getLogger(__name__)
 
@@ -90,12 +90,12 @@ def read_line(history: InMemoryHistory, title: str = "sift") -> str | None:
 # ---------------------------------------------------------------------------
 
 def _size(num_bytes: int) -> str:
-    from sift.cli import human_size
+    from sift_downloads.cli import human_size
     return human_size(num_bytes)
 
 
 def _age(timestamp: float) -> str:
-    from sift.cli import human_age
+    from sift_downloads.cli import human_age
     return human_age(timestamp)
 
 
@@ -205,7 +205,7 @@ class Ui:
 # ---------------------------------------------------------------------------
 
 def _do_find(ui: Ui, request: Request) -> None:
-    from sift.find import find_files
+    from sift_downloads.find import find_files
 
     session = ui.session
     with ui.console.status("[dim]searching...[/dim]", spinner="dots"):
@@ -217,7 +217,7 @@ def _do_find(ui: Ui, request: Request) -> None:
 
 
 def _do_ask(ui: Ui, request: Request) -> None:
-    from sift.generate import AnswerStream
+    from sift_downloads.generate import AnswerStream
 
     session = ui.session
     session.remember("user", request.argument)
@@ -251,7 +251,7 @@ def _do_ask(ui: Ui, request: Request) -> None:
 
 
 def _do_open(ui: Ui, request: Request, reveal: bool) -> None:
-    from sift.open_file import open_file, reveal_file
+    from sift_downloads.open_file import open_file, reveal_file
 
     path, problem = ui.session.resolve(request.index)
     if problem:
@@ -266,7 +266,7 @@ def _do_open(ui: Ui, request: Request, reveal: bool) -> None:
 
 
 def _do_sync(ui: Ui, quiet: bool = False) -> None:
-    from sift.index import update_index
+    from sift_downloads.index import update_index
 
     try:
         with ui.console.status("[dim]syncing index...[/dim]", spinner="dots"):
@@ -286,8 +286,8 @@ def _do_sync(ui: Ui, quiet: bool = False) -> None:
 
 
 def _do_status(ui: Ui) -> None:
-    from sift.index import Manifest
-    from sift.store import VectorStore
+    from sift_downloads.index import Manifest
+    from sift_downloads.store import VectorStore
 
     settings = ui.session.settings
     manifest = Manifest.load(settings=settings)

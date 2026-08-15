@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import functools
 
-from sift.config import Settings, get_settings
-from sift.index import embed_texts
-from sift.store import VectorStore, normalize
+from sift_downloads.config import Settings, get_settings
+from sift_downloads.index import embed_texts
+from sift_downloads.store import VectorStore, normalize
 
 
 @functools.lru_cache(maxsize=1)

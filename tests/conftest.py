@@ -16,8 +16,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sift import config
-from sift.config import configure
+from sift_downloads import config
+from sift_downloads.config import configure
 
 FAKE_DIM = 16
 

@@ -7,8 +7,8 @@ that works fine until someone sets an unusual overlap and the process hangs.
 """
 from __future__ import annotations
 
-from sift.chunk import _best_cut, chunk_one, chunk_text
-from sift.config import configure
+from sift_downloads.chunk import _best_cut, chunk_one, chunk_text
+from sift_downloads.config import configure
 
 
 def test_short_text_is_one_chunk():

@@ -38,7 +38,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sift.config import Settings, get_settings
+from sift_downloads.config import Settings, get_settings
 
 FORMAT_VERSION = 1
 

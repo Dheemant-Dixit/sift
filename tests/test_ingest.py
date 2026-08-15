@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import pytest
 
-from sift.ingest import (REASON_LOCKED, REASON_NO_TEXT, PdfLocked, extract_pdf,
-                         load_document)
+from sift_downloads.ingest import (REASON_LOCKED, REASON_NO_TEXT, PdfLocked,
+                                   extract_pdf, load_document)
 
 
 # --- extraction ------------------------------------------------------------

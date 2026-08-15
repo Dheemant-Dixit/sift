@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-from sift.session import HELP, Session, UiCommand, parse
-from sift.ui import Ui, _clip
+from sift_downloads.session import HELP, Session, UiCommand, parse
+from sift_downloads.ui import Ui, _clip
 
 
 # --- parsing ---------------------------------------------------------------
@@ -242,13 +242,13 @@ def test_a_lone_question_mark_asks_for_help(line):
 # --- how a bare `sift` is routed -------------------------------------------
 
 def test_bare_invocation_starts_the_session():
-    from sift.cli import with_default_command as route
+    from sift_downloads.cli import with_default_command as route
     assert route([]) == ["ui"]
     assert route(["--source", "/x"]) == ["ui", "--source", "/x"]
 
 
 def test_explicit_commands_are_left_alone():
-    from sift.cli import with_default_command as route
+    from sift_downloads.cli import with_default_command as route
     assert route(["find", "tax"]) == ["find", "tax"]
     assert route(["--help"]) == ["--help"]
     assert route(["--version"]) == ["--version"]
@@ -256,12 +256,12 @@ def test_explicit_commands_are_left_alone():
 
 def test_a_typo_is_left_for_argparse_to_explain():
     """`sift fnid x` should list valid choices, not fail inside `ui`."""
-    from sift.cli import with_default_command as route
+    from sift_downloads.cli import with_default_command as route
     assert route(["fnid", "x"]) == ["fnid", "x"]
 
 
 def test_non_interactive_stdin_falls_through_to_help():
     """A bare `sift` in a script has nobody to type into a prompt."""
-    from sift.cli import with_default_command as route
+    from sift_downloads.cli import with_default_command as route
     assert route([], interactive=False) == []
     assert route(["--source", "/x"], interactive=False) == ["--source", "/x"]

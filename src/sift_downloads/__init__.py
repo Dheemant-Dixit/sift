@@ -3,14 +3,14 @@ sift — ask your Downloads folder where a file is, and what it says.
 
 Usable as a library as well as a CLI:
 
-    from sift import find_files, answer, update_index
+    from sift_downloads import find_files, answer, update_index
 
     update_index()                       # sync the index with the folder
     hits = find_files("rental agreement")  # ranked files
     result = answer("what is my notice period?")
     print(result.text, result.sources)
 """
-from sift.config import Settings, configure, get_settings
+from sift_downloads.config import Settings, configure, get_settings
 
 __version__ = "0.1.0"
 
@@ -28,15 +28,15 @@ def __getattr__(name: str):
     --help would take a second to print. These resolve on first actual use.
     """
     if name in ("find_files", "FileHit"):
-        from sift import find
+        from sift_downloads import find
         return getattr(find, name)
     if name in ("answer", "Answer"):
-        from sift import generate
+        from sift_downloads import generate
         return getattr(generate, name)
     if name in ("update_index", "rebuild_index"):
-        from sift import index
+        from sift_downloads import index
         return getattr(index, name)
     if name == "search":
-        from sift import retrieve
+        from sift_downloads import retrieve
         return retrieve.search
     raise AttributeError(f"module 'sift' has no attribute {name!r}")

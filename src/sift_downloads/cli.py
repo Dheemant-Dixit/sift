@@ -13,9 +13,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from sift import __version__
-from sift.config import ConfigError, configure, get_settings
-from sift.store import IndexProblem
+from sift_downloads import __version__
+from sift_downloads.config import ConfigError, configure, get_settings
+from sift_downloads.store import IndexProblem
 
 # --- small formatting helpers ---------------------------------------------
 
@@ -46,9 +46,9 @@ def human_age(timestamp: float) -> str:
 # --- commands --------------------------------------------------------------
 
 def cmd_find(args) -> int:
-    from sift.doctor import preflight
-    from sift.find import find_files
-    from sift.open_file import open_file, reveal_file
+    from sift_downloads.doctor import preflight
+    from sift_downloads.find import find_files
+    from sift_downloads.open_file import open_file, reveal_file
 
     settings = get_settings()
     preflight(settings, need_models=False)  # filename matching works without a model
@@ -88,8 +88,8 @@ def cmd_find(args) -> int:
 
 
 def cmd_ask(args) -> int:
-    from sift.doctor import preflight
-    from sift.generate import answer
+    from sift_downloads.doctor import preflight
+    from sift_downloads.generate import answer
 
     settings = get_settings()
     preflight(settings)
@@ -122,13 +122,13 @@ def cmd_ask(args) -> int:
 
 
 def cmd_index(args) -> int:
-    from sift.doctor import preflight
-    from sift.index import Manifest, rebuild_index, update_index
+    from sift_downloads.doctor import preflight
+    from sift_downloads.index import Manifest, rebuild_index, update_index
 
     settings = get_settings()
     preflight(settings)
 
-    logging.getLogger("sift").setLevel(logging.INFO)
+    logging.getLogger("sift_downloads").setLevel(logging.INFO)
     if args.rebuild:
         print(f"Rebuilding index of {settings.source_dir} from scratch ...")
         stats = rebuild_index(settings)
@@ -163,9 +163,9 @@ def cmd_unlock(args) -> int:
     """
     from getpass import getpass
 
-    from sift.doctor import preflight
-    from sift.index import Manifest, unlock_file
-    from sift.ingest import REASON_LOCKED
+    from sift_downloads.doctor import preflight
+    from sift_downloads.index import Manifest, unlock_file
+    from sift_downloads.ingest import REASON_LOCKED
 
     settings = get_settings()
     preflight(settings)
@@ -225,19 +225,19 @@ def cmd_unlock(args) -> int:
 
 
 def cmd_watch(args) -> int:
-    from sift.doctor import preflight
-    from sift.watch import watch
+    from sift_downloads.doctor import preflight
+    from sift_downloads.watch import watch
 
     settings = get_settings()
     preflight(settings)
-    logging.getLogger("sift").setLevel(logging.INFO)
+    logging.getLogger("sift_downloads").setLevel(logging.INFO)
     watch(settings)
     return 0
 
 
 def cmd_status(args) -> int:
-    from sift.index import Manifest
-    from sift.store import VectorStore
+    from sift_downloads.index import Manifest
+    from sift_downloads.store import VectorStore
 
     settings = get_settings()
     manifest = Manifest.load(settings=settings)
@@ -264,7 +264,7 @@ def cmd_status(args) -> int:
 
     # Grouped by WHY, not lumped together: a locked file needs a password and a
     # scanned one needs OCR, and telling someone the wrong one wastes their time.
-    from sift.ingest import REASON_LOCKED, REASON_NO_TEXT
+    from sift_downloads.ingest import REASON_LOCKED, REASON_NO_TEXT
 
     by_reason: dict[str, list[str]] = {}
     for path, entry in manifest.files.items():
@@ -293,7 +293,7 @@ def cmd_status(args) -> int:
 
 
 def cmd_doctor(args) -> int:
-    from sift.doctor import FAIL, OK, run_checks
+    from sift_downloads.doctor import FAIL, OK, run_checks
 
     settings = get_settings()
     symbols = {OK: "ok  ", "warn": "warn", FAIL: "FAIL"}
@@ -308,8 +308,8 @@ def cmd_doctor(args) -> int:
 
 def cmd_search(args) -> int:
     """Raw chunk-level hits. The tool for calibrating --min-score."""
-    from sift.doctor import preflight
-    from sift.retrieve import search
+    from sift_downloads.doctor import preflight
+    from sift_downloads.retrieve import search
 
     settings = get_settings()
     preflight(settings)
@@ -327,8 +327,8 @@ def cmd_search(args) -> int:
 
 
 def cmd_ui(args) -> int:
-    from sift.doctor import preflight
-    from sift.ui import run
+    from sift_downloads.doctor import preflight
+    from sift_downloads.ui import run
 
     settings = get_settings()
     # need_models=False: the session is still useful with Ollama down — finding
@@ -339,7 +339,7 @@ def cmd_ui(args) -> int:
 
 
 def cmd_purge(args) -> int:
-    from sift.index import purge_index
+    from sift_downloads.index import purge_index
 
     settings = get_settings()
     if not args.yes:
@@ -361,7 +361,7 @@ def _quiet_sync(settings) -> None:
     a second, so the alternative — answering from a stale index — isn't worth
     the time it saves.
     """
-    from sift.index import update_index
+    from sift_downloads.index import update_index
 
     try:
         update_index(settings)

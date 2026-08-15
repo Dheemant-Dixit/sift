@@ -33,10 +33,10 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from sift.config import Settings, get_settings
-from sift.index import Manifest
-from sift.ingest import REASON_LOCKED, REASON_NO_TEXT
-from sift.retrieve import search
+from sift_downloads.config import Settings, get_settings
+from sift_downloads.index import Manifest
+from sift_downloads.ingest import REASON_LOCKED, REASON_NO_TEXT
+from sift_downloads.retrieve import search
 
 log = logging.getLogger(__name__)
 

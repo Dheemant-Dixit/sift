@@ -44,8 +44,9 @@ brew install ollama && brew services start ollama     # macOS
 ollama pull nomic-embed-text     # turns text into vectors
 ollama pull llama3.1:8b          # writes the answers
 
-# 2. sift
-pip install -e ".[watch]"
+# 2. sift  (the command is `sift`; the package name has a suffix because
+#           plain `sift` was already taken on PyPI)
+pip install "sift-downloads[watch]"
 
 # 3. read your Downloads folder (a few hundred files takes under a minute)
 sift index

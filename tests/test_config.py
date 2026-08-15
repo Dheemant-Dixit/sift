@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from sift import config
-from sift.config import (ConfigError, Settings, configure, get_settings,
+from sift_downloads import config
+from sift_downloads.config import (ConfigError, Settings, configure, get_settings,
                          require_source_dir)
 
 
@@ -53,7 +53,7 @@ def test_configure_busts_the_settings_cache(tmp_path):
 
 def test_configure_busts_the_store_cache(tmp_path, monkeypatch):
     """A stale store cache would answer the new --source with the old index."""
-    from sift import retrieve
+    from sift_downloads import retrieve
 
     retrieve.get_store.cache_clear()
     retrieve.get_store()  # populate

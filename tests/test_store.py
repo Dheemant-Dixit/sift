@@ -14,8 +14,8 @@ import json
 import numpy as np
 import pytest
 
-from sift.config import configure, get_settings
-from sift.store import (CorruptIndex, IndexedChunk, IndexModelMismatch,
+from sift_downloads.config import configure, get_settings
+from sift_downloads.store import (CorruptIndex, IndexedChunk, IndexModelMismatch,
                         VectorStore, normalize)
 
 

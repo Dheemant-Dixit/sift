@@ -28,7 +28,7 @@ from pathlib import Path
 import docx  # python-docx
 from pypdf import PasswordType, PdfReader
 
-from sift.config import Settings, get_settings, require_source_dir
+from sift_downloads.config import Settings, get_settings, require_source_dir
 
 log = logging.getLogger(__name__)
 

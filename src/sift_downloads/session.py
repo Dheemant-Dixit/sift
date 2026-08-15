@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from sift.config import Settings, get_settings
+from sift_downloads.config import Settings, get_settings
 
 
 class UiCommand:

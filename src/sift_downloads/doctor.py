@@ -18,8 +18,8 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from sift.config import (ConfigError, Settings, get_settings)
-from sift.store import IndexProblem, VectorStore
+from sift_downloads.config import (ConfigError, Settings, get_settings)
+from sift_downloads.store import IndexProblem, VectorStore
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 
@@ -96,7 +96,7 @@ def check_models(settings: Settings) -> list[Check]:
 
 def check_source(settings: Settings) -> Check:
     """Does the folder exist, and is there anything in it worth indexing?"""
-    from sift.ingest import scan_source
+    from sift_downloads.ingest import scan_source
 
     try:
         scan = scan_source(settings)

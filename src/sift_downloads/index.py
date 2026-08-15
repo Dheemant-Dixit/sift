@@ -29,10 +29,10 @@ from typing import Callable
 import litellm
 import numpy as np
 
-from sift.chunk import chunk_one
-from sift.config import Settings, get_settings
-from sift.ingest import REASON_LOCKED, file_fingerprint, load_document, scan_source
-from sift.store import IndexedChunk, VectorStore, normalize
+from sift_downloads.chunk import chunk_one
+from sift_downloads.config import Settings, get_settings
+from sift_downloads.ingest import REASON_LOCKED, file_fingerprint, load_document, scan_source
+from sift_downloads.store import IndexedChunk, VectorStore, normalize
 
 log = logging.getLogger(__name__)
 

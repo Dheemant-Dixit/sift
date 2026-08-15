@@ -25,8 +25,8 @@ import threading
 import time
 from pathlib import Path
 
-from sift.config import Settings, get_settings, require_source_dir
-from sift.index import update_index
+from sift_downloads.config import Settings, get_settings, require_source_dir
+from sift_downloads.index import update_index
 
 log = logging.getLogger(__name__)
 

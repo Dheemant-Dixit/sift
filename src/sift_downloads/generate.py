@@ -21,8 +21,8 @@ from dataclasses import dataclass, field
 
 import litellm
 
-from sift.config import Settings, check_cloud_consent, get_settings, warn_if_cloud
-from sift.retrieve import search
+from sift_downloads.config import Settings, check_cloud_consent, get_settings, warn_if_cloud
+from sift_downloads.retrieve import search
 
 SYSTEM_PROMPT = """You are a helpful assistant that answers questions strictly \
 from the provided context, which comes from the user's own documents.

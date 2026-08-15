@@ -346,7 +346,7 @@ def reset_caches() -> None:
     and numpy into commands that don't need them.
     """
     get_settings.cache_clear()
-    retrieve = sys.modules.get("sift.retrieve")
+    retrieve = sys.modules.get("sift_downloads.retrieve")
     if retrieve is not None:
         retrieve.get_store.cache_clear()
 

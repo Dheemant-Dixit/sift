@@ -3,12 +3,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "sift"
+name = "sift-downloads"
 version = "0.1.0"
 description = "Ask your Downloads folder where a file is — and what it says. Runs entirely on your machine."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
+authors = [{ name = "Dheemant Dixit", email = "dheemantdixit1107@gmail.com" }]
 keywords = ["rag", "search", "downloads", "local-first", "ollama", "semantic-search"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -37,11 +38,18 @@ dependencies = [
 watch = ["watchdog>=4.0"]
 dev = ["pytest>=8.0"]
 
+[project.urls]
+Homepage = "https://github.com/Dheemant-Dixit/sift"
+Repository = "https://github.com/Dheemant-Dixit/sift"
+Issues = "https://github.com/Dheemant-Dixit/sift/issues"
+
+# The command stays `sift` — that's what users type, and it's independent of
+# the distribution name, which had to change because `sift` is taken on PyPI.
 [project.scripts]
-sift = "sift.cli:main"
+sift = "sift_downloads.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/sift"]
+packages = ["src/sift_downloads"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
