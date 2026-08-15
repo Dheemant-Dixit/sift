@@ -4,7 +4,10 @@
 
 sift searches your Downloads folder by meaning, not just by filename, and
 answers questions about what's in there. Everything runs on your own machine —
-no API keys, no accounts, nothing uploaded.
+no API keys, no accounts, no documents uploaded.
+
+*Installs as `sift-downloads` (plain `sift` was taken on PyPI). The command you
+type is `sift`.*
 
 ```
 ● sift  /Users/you/Downloads
@@ -37,12 +40,12 @@ nothing takes over your screen and you keep your scrollback.
 ## Install
 
 ```bash
-# 1. a local model runner (free, ~2GB of models)
+# 1. a local model runner (free, but ~5GB of models to download)
 brew install ollama && brew services start ollama     # macOS
 # curl -fsSL https://ollama.com/install.sh | sh       # Linux
 
-ollama pull nomic-embed-text     # turns text into vectors
-ollama pull llama3.1:8b          # writes the answers
+ollama pull nomic-embed-text     # 274MB — turns text into vectors
+ollama pull llama3.1:8b          # 4.9GB — writes the answers
 
 # 2. sift  (the command is `sift`; the package name has a suffix because
 #           plain `sift` was already taken on PyPI)
@@ -57,6 +60,18 @@ sift
 
 If anything looks wrong, run `sift doctor`. It checks each piece and prints the
 exact command to fix whatever is broken.
+
+**On a small disk or a slow connection?** The 4.9GB one is only used to write
+the final answer. Swap it for something smaller — `sift` still finds files just
+as well, and answers get a little blunter:
+
+```bash
+ollama pull llama3.2:3b
+sift ask "..." --chat-model ollama_chat/llama3.2:3b    # or SIFT_CHAT_MODEL
+```
+
+The 274MB embedding model is the one that does the searching, and it is not
+optional.
 
 ---
 
@@ -133,8 +148,22 @@ knowing before you run it:
 
 Your Downloads folder holds bank statements, ID scans and contracts. So:
 
-- **Nothing leaves your machine.** Both models run locally through Ollama. The
-  only network traffic is to `localhost`.
+- **No document text leaves your machine.** Both models run locally through
+  Ollama, so every byte of every file you index is read, embedded and answered
+  on `localhost`.
+- **One thing does go out, and it isn't yours.** sift uses
+  [litellm](https://github.com/BerriAI/litellm) to talk to models, and on
+  startup litellm downloads a public price list of known models from
+  `raw.githubusercontent.com`. It sends nothing — no filenames, no text, no
+  identifiers — but it is a real request, so "only localhost" would be a lie.
+  Turn it off and litellm uses the copy bundled in the package:
+
+  ```bash
+  export LITELLM_LOCAL_MODEL_COST_MAP=True
+  ```
+
+  With that set, `sift` talks to nothing but Ollama. Verify it yourself with
+  Little Snitch, `lsof -i`, or `tcpdump` — please do.
 - **The index holds the actual text of your documents.** It lives in your
   system's user-data folder — `sift status` prints the path. Don't commit it or
   share the `.npz`. `sift purge` deletes it. This includes anything you
