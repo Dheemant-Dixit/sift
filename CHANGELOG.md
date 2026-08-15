@@ -19,12 +19,10 @@ First public release.
 
 **Local by default**
 
-Both models run on Ollama. No document text leaves your machine. Cloud models
-work through litellm but refuse to run without an explicit `--allow-cloud`.
-
-Note: litellm downloads a public model price list from `raw.githubusercontent.com`
-on startup. It sends nothing about you, and `LITELLM_LOCAL_MODEL_COST_MAP=True`
-turns it off.
+Both models run on Ollama, and a default run opens no connection except to
+Ollama on `localhost` — litellm's model-price download is switched off in
+favour of the copy bundled in the package. Cloud models work through litellm
+but refuse to run without an explicit `--allow-cloud`.
 
 **Built from scratch**
 

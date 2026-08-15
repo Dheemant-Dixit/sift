@@ -151,19 +151,16 @@ Your Downloads folder holds bank statements, ID scans and contracts. So:
 - **No document text leaves your machine.** Both models run locally through
   Ollama, so every byte of every file you index is read, embedded and answered
   on `localhost`.
-- **One thing does go out, and it isn't yours.** sift uses
-  [litellm](https://github.com/BerriAI/litellm) to talk to models, and on
-  startup litellm downloads a public price list of known models from
-  `raw.githubusercontent.com`. It sends nothing — no filenames, no text, no
-  identifiers — but it is a real request, so "only localhost" would be a lie.
-  Turn it off and litellm uses the copy bundled in the package:
+- **Not even a phone-home.** sift talks to models through
+  [litellm](https://github.com/BerriAI/litellm), which by default downloads a
+  public price list of known models from `raw.githubusercontent.com` when it
+  loads. That request carries nothing about you, but it is still a request, so
+  sift turns it off (`LITELLM_LOCAL_MODEL_COST_MAP`) and uses the copy shipped
+  inside the package. sift does no cost accounting and never reads that list.
 
-  ```bash
-  export LITELLM_LOCAL_MODEL_COST_MAP=True
-  ```
-
-  With that set, `sift` talks to nothing but Ollama. Verify it yourself with
-  Little Snitch, `lsof -i`, or `tcpdump` — please do.
+  The result is that a default run opens **no connection except to Ollama on
+  `localhost`**. Don't take our word for it — `lsof -i`, Little Snitch or
+  `tcpdump` will tell you. Please check.
 - **The index holds the actual text of your documents.** It lives in your
   system's user-data folder — `sift status` prints the path. Don't commit it or
   share the `.npz`. `sift purge` deletes it. This includes anything you
