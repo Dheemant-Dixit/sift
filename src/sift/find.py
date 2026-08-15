@@ -35,6 +35,7 @@ from pathlib import Path
 
 from sift.config import Settings, get_settings
 from sift.index import Manifest
+from sift.ingest import REASON_LOCKED, REASON_NO_TEXT
 from sift.retrieve import search
 
 log = logging.getLogger(__name__)
@@ -198,10 +199,16 @@ def find_files(query: str, limit: int = 10, recent_first: bool = False,
         else:
             matched_on = "filename"
 
-        num_chunks = manifest.files.get(path_str, {}).get("num_chunks", 0)
+        recorded = manifest.files.get(path_str, {})
+        num_chunks = recorded.get("num_chunks", 0)
         note = skip_reason
         if not note and num_chunks == 0:
-            note = "no extractable text (scanned or image-only?)"
+            # Use the reason extraction actually gave, rather than guessing.
+            # Manifests written before reasons existed fall back to the old
+            # assumption, which is right for everything except locked files.
+            note = recorded.get("reason") or REASON_NO_TEXT
+            if note == REASON_LOCKED:
+                note = f'{REASON_LOCKED} — run: sift unlock "{path.name}"'
 
         hits.append(FileHit(
             path=path,

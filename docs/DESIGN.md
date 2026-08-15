@@ -33,7 +33,7 @@ ASKING    (sift ask)
 | File | What it covers |
 |---|---|
 | `config.py` | Every setting, and why they are read at call time instead of import time |
-| `ingest.py` | Getting text out of pdf/docx/md/txt, and surviving a real Downloads folder |
+| `ingest.py` | Getting text out of pdf/docx/md/txt, surviving a real Downloads folder, and reporting *why* a file yielded nothing |
 | `chunk.py` | Splitting text with overlap, and the size/overlap tradeoff |
 | `store.py` | The vector store: vectors and text kept together, cosine search, atomic saves |
 | `index.py` | The incremental sync layer |
@@ -144,6 +144,54 @@ score, so it competes fairly instead of steamrolling.
 
 ---
 
+## Why "it produced no text" is not a reason
+
+Three files in the folder this was built against produced no chunks. All three
+were reported to the user the same way: *"no extractable text (scanned or
+image-only?)"*.
+
+Two of them were not scanned. They were password-protected bank statements. The
+advice implied by that message — get OCR — would never have worked on them, and
+the advice that would have worked was never offered.
+
+The cause was a lossy boundary. `load_document()` returned `dict | None`, so a
+locked file and a scanned file both arrived downstream as the same thing: a file
+with `num_chunks == 0`. The only fact that survived was *that* nothing came out,
+never *why*. With one fact available, the UI had to guess, and it guessed the
+more common case.
+
+The fix is to stop discarding the reason:
+
+```python
+def load_document(path, password=None) -> tuple[dict | None, str]:
+    ...                       # (record, "") or (None, why-not)
+```
+
+which matches the `(ok, reason)` shape `is_indexable()` already used in the same
+file. The reason goes into the manifest next to `num_chunks`, and `find` and
+`status` read it instead of inferring. Manifests written before this existed have
+no `reason` key, so both fall back to the old assumption — right for everything
+except the case that prompted the change, which is the correct way round.
+
+**Locked PDFs are handled explicitly, not by catching the error.** pypdf raises
+`FileNotDecryptedError` lazily, when you touch `.pages` — far from the cause, and
+at that point indistinguishable from an ordinary malformed file. So `extract_pdf`
+checks `reader.is_encrypted` up front and raises its own `PdfLocked`.
+
+It tries the empty password first. A lot of PDFs are encrypted only to forbid
+printing or copying and open with no password at all; that costs one call and
+spares the user a prompt they don't need.
+
+**`sift unlock` sits outside the sync path.** Two reasons. A sync that could
+block on a prompt is unusable from `sift watch` or a background service. And
+unlocking doesn't change the file, so its fingerprint is unchanged and the next
+sync correctly sees nothing to do — the text stays put until `--rebuild`. That
+re-prompt is the direct cost of never storing the password, which is the
+trade this project chose: the index already holds your documents in the clear,
+and adding a credential store to it would be a second, worse secret to keep.
+
+---
+
 ## Why `ask` refuses without calling the model
 
 Prompts like "only answer from the context" are a request. A small local model
@@ -194,7 +242,11 @@ Real ones, not modesty.
 
 - **No OCR.** Scanned and image-only PDFs give up no text, so their contents
   cannot be searched. They stay findable by filename, which is why `find` scores
-  filenames.
+  filenames. Password-protected PDFs used to be lumped in here; they are a
+  separate problem with a real fix, and `sift unlock` is it.
+- **Unlocked text is stored in the clear.** `sift unlock` puts a
+  password-protected document's text into `index.npz` alongside everything else.
+  The file stays protected on disk; its contents no longer are.
 - **No re-ranker.** Retrieval ranks by *topic similarity*, not by *does this
   answer the question*. On a big folder it shows: "what is my designation?" can
   rank a dozen employment documents above the payslip that states the answer

@@ -18,8 +18,10 @@ import os
 import pytest
 
 from sift.config import configure, get_settings
-from sift.index import Manifest, purge_index, rebuild_index, update_index
-from sift.ingest import content_key, is_indexable, scan_source
+from sift.index import (Manifest, purge_index, rebuild_index, unlock_file,
+                        update_index)
+from sift.ingest import (REASON_LOCKED, REASON_NO_TEXT, content_key,
+                         is_indexable, scan_source)
 from sift.store import VectorStore
 
 
@@ -230,3 +232,98 @@ def test_sync_survives_an_unreadable_file(make_file, embedder, monkeypatch):
     assert stats.added == 2
     assert stats.chunks_total > 0
     assert Manifest.load().files[str(get_settings().source_dir / "bad.md")]["num_chunks"] == 0
+
+
+# --- password-protected files ----------------------------------------------
+#
+# The product bug behind these: a locked file and a scanned file both produce
+# zero chunks, so both were reported as "scanned or image-only". Most locked
+# files are bank statements, and telling someone to OCR one is useless advice.
+
+def test_a_locked_file_records_that_it_is_locked(make_pdf, embedder):
+    make_pdf("statement.pdf", text="Balance 1000", password="pw")
+    update_index(embedder=embedder)
+
+    manifest = Manifest.load()
+    entry = next(iter(manifest.files.values()))
+    assert entry["num_chunks"] == 0
+    assert entry["reason"] == REASON_LOCKED
+
+
+def test_a_scanned_file_is_not_confused_with_a_locked_one(make_pdf, embedder):
+    make_pdf("scan.pdf", text="")
+    update_index(embedder=embedder)
+
+    entry = next(iter(Manifest.load().files.values()))
+    assert entry["reason"] == REASON_NO_TEXT
+    assert entry["reason"] != REASON_LOCKED
+
+
+def test_locked_lists_only_what_a_password_would_fix(make_pdf, make_file, embedder):
+    make_pdf("statement.pdf", text="Balance", password="pw")
+    make_pdf("scan.pdf", text="")
+    make_file("notes.md", "readable")
+    update_index(embedder=embedder)
+
+    locked = Manifest.load().locked()
+    assert [os.path.basename(p) for p in locked] == ["statement.pdf"]
+
+
+def test_unlocking_indexes_the_text(make_pdf, embedder):
+    path = make_pdf("statement.pdf", text="Closing balance is 4200", password="pw")
+    update_index(embedder=embedder)
+    assert len(VectorStore.load()) == 0
+
+    added, reason = unlock_file(str(path), "pw", embedder=embedder)
+    assert reason == ""
+    assert added > 0
+
+    store = VectorStore.load()
+    assert "Closing balance is 4200" in " ".join(r.text for r in store.records)
+    entry = Manifest.load().files[str(path)]
+    assert entry["reason"] == ""
+    assert entry["num_chunks"] == added
+
+
+def test_a_wrong_password_changes_nothing(make_pdf, embedder):
+    path = make_pdf("statement.pdf", text="Balance", password="pw")
+    update_index(embedder=embedder)
+
+    added, reason = unlock_file(str(path), "wrong", embedder=embedder)
+    assert added == 0
+    assert reason == REASON_LOCKED
+    assert len(VectorStore.load()) == 0
+    assert Manifest.load().files[str(path)]["reason"] == REASON_LOCKED
+
+
+def test_unlocking_twice_does_not_duplicate_chunks(make_pdf, embedder):
+    path = make_pdf("statement.pdf", text="Closing balance is 4200", password="pw")
+    update_index(embedder=embedder)
+
+    first, _ = unlock_file(str(path), "pw", embedder=embedder)
+    second, _ = unlock_file(str(path), "pw", embedder=embedder)
+    assert first == second == len(VectorStore.load())
+
+
+def test_an_unlocked_file_survives_the_next_sync(make_pdf, embedder):
+    """Unlocking doesn't change the file, so the sync must see nothing to do."""
+    path = make_pdf("statement.pdf", text="Closing balance is 4200", password="pw")
+    update_index(embedder=embedder)
+    added, _ = unlock_file(str(path), "pw", embedder=embedder)
+
+    stats = update_index(embedder=embedder)
+    assert not stats.changed
+    assert len(VectorStore.load()) == added
+
+
+def test_a_manifest_written_before_reasons_existed_still_loads(make_file, embedder):
+    """Backward compatibility: no 'reason' key must not crash or mislead."""
+    make_file("notes.md", "hello")
+    update_index(embedder=embedder)
+
+    manifest = Manifest.load()
+    for entry in manifest.files.values():
+        entry.pop("reason", None)
+    manifest.save()
+
+    assert Manifest.load().locked() == []

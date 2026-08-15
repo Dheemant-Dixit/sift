@@ -80,6 +80,7 @@ Or run single commands without the session:
 | `sift ask "what's my policy number?"` | one grounded answer with sources |
 | `sift index` | update the index (usually under a second) |
 | `sift index --rebuild` | start over; needed after changing models |
+| `sift unlock` | read your password-protected PDFs (asks for each password) |
 | `sift status` | what's indexed, and what was skipped and why |
 | `sift search "query"` | raw passage scores, for tuning |
 | `sift watch` | keep the index updated as the folder changes |
@@ -102,6 +103,29 @@ Each result shows how it matched — `·` means the contents matched, `name` mea
 the filename did. Identical copies like `Statement (1).pdf` collapse into one
 result that tells you about its twins.
 
+### Password-protected PDFs
+
+Banks send statements locked with a password. sift tells you which files those
+are, instead of guessing that they're scanned:
+
+```
+$ sift status
+2 file(s) — password-protected (findable by name only):
+  · AccountStatement_40871876782.pdf
+  · lony3005_00000040871876782_E.pdf
+  → sift unlock     to read these
+```
+
+`sift unlock` asks for each password, reads the file, and adds it to the index.
+**The password is never stored** — not in a file, not in your keychain — so
+`sift index --rebuild` will ask again. That is deliberate. Two things worth
+knowing before you run it:
+
+- Unlocking puts that document's text into the index, which is **not** encrypted.
+  A file you locked on purpose becomes readable in `index.npz`.
+- Some PDFs are locked only to stop printing or copying, and open with an empty
+  password. sift tries that first, so those never reach you as a prompt.
+
 ---
 
 ## Privacy
@@ -112,7 +136,8 @@ Your Downloads folder holds bank statements, ID scans and contracts. So:
   only network traffic is to `localhost`.
 - **The index holds the actual text of your documents.** It lives in your
   system's user-data folder — `sift status` prints the path. Don't commit it or
-  share the `.npz`. `sift purge` deletes it.
+  share the `.npz`. `sift purge` deletes it. This includes anything you
+  `sift unlock` — that text is stored in the clear like everything else.
 - **Cloud models need explicit permission.** sift can use Anthropic, OpenAI or
   Gemini through [litellm](https://github.com/BerriAI/litellm), but naming a
   cloud model is not enough. It refuses without `--allow-cloud` and then warns
@@ -176,7 +201,8 @@ never writes to your system.
 ## What it can't do
 
 - **No OCR.** Scanned PDFs give up no text, so their contents can't be searched.
-  They stay findable by filename.
+  They stay findable by filename. (A *locked* PDF is a different problem with a
+  real fix — see `sift unlock` above.)
 - **No re-ranker.** Ranking is by topic similarity, not by "does this answer the
   question". Ask "what is my designation?" and a dozen employment documents can
   outrank the payslip that says it outright.

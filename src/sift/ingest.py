@@ -10,7 +10,7 @@ folder is not, and most of this module is about that:
   - half-finished downloads (.crdownload, .part) that are still being written
   - duplicates: Statement.pdf, Statement (1).pdf, Statement (2).pdf
   - scanned PDFs that contain no extractable text at all
-  - encrypted PDFs that refuse to open
+  - password-protected PDFs, which is what most bank statements are
   - the occasional 400MB ISO sitting next to your payslips
 
 Extraction returns one big string per document. Chunking is deliberately NOT
@@ -26,11 +26,22 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import docx  # python-docx
-from pypdf import PdfReader
+from pypdf import PasswordType, PdfReader
 
 from sift.config import Settings, get_settings, require_source_dir
 
 log = logging.getLogger(__name__)
+
+
+class PdfLocked(Exception):
+    """A PDF that needs a password sift wasn't given."""
+
+
+# Why a file produced no text. Recorded in the manifest and shown to the user,
+# so these strings are part of the interface — `sift unlock` looks for
+# REASON_LOCKED to decide which files it can help with.
+REASON_LOCKED = "password-protected"
+REASON_NO_TEXT = "no text layer (scanned or image-only)"
 
 # pypdf narrates every malformed PDF it meets ("invalid pdf header", "EOF marker
 # not found") straight to its own logger. On a Downloads folder that is a wall
@@ -56,7 +67,7 @@ _COPY_SUFFIX_RE = re.compile(r"\s*\((\d+)\)$")
 # Extraction
 # ---------------------------------------------------------------------------
 
-def extract_pdf(path: Path) -> str:
+def extract_pdf(path: Path, password: str | None = None) -> str:
     """Pull text out of a PDF, page by page.
 
     Worth understanding: a PDF stores *visual layout*, not clean text. pypdf
@@ -64,8 +75,18 @@ def extract_pdf(path: Path) -> str:
     ones (those need OCR, which sift does not do). An empty result here is
     therefore normal and expected, not a bug — see `find.py` for why such files
     are still locatable by name.
+
+    Encryption is handled explicitly rather than by catching pypdf's error,
+    because pypdf raises it lazily on page access — far from the cause, and
+    indistinguishable there from an ordinary broken file.
     """
     reader = PdfReader(path)
+    if reader.is_encrypted:
+        # The empty password first: many PDFs are encrypted only to forbid
+        # printing or copying, and open with no password at all. Costs one call
+        # and spares the user a prompt they don't need.
+        if reader.decrypt(password or "") == PasswordType.NOT_DECRYPTED:
+            raise PdfLocked(path.name)
     return "\n\n".join(page.extract_text() or "" for page in reader.pages)
 
 
@@ -85,25 +106,36 @@ EXTRACTORS = {
 }
 
 
-def load_document(path: Path) -> dict | None:
-    """Extract one file into a record, or None if there is no usable text.
+def load_document(path: Path, password: str | None = None) -> tuple[dict | None, str]:
+    """Extract one file into a record.
+
+    Returns (record, "") on success and (None, reason) on failure, following the
+    same shape as is_indexable() above. The reason matters: it is stored in the
+    manifest and shown to the user, and it is the difference between telling
+    someone their bank statement needs a password and telling them it needs OCR.
 
     Never raises: one broken PDF in a folder of 300 must not abort the sync.
     """
     extractor = EXTRACTORS.get(path.suffix.lower())
     if extractor is None:
-        return None
+        return None, "unsupported type"
     try:
-        text = extractor(path).strip()
+        # Only PDFs can be locked, so only extract_pdf takes a password.
+        raw = extract_pdf(path, password) if extractor is extract_pdf else extractor(path)
+        text = raw.strip()
+    except PdfLocked:
+        log.info("  ! locked  %s: %s", path.name, REASON_LOCKED)
+        return None, REASON_LOCKED
     except Exception as e:
         log.info("  ! skipped %s: %s: %s", path.name, type(e).__name__, e)
-        return None
+        return None, f"unreadable ({type(e).__name__})"
 
     if not text:
-        log.info("  ! empty   %s: no extractable text (scanned or image-only?)", path.name)
-        return None
+        log.info("  ! empty   %s: %s", path.name, REASON_NO_TEXT)
+        return None, REASON_NO_TEXT
 
-    return {"path": str(path), "filename": path.name, "text": text, "num_chars": len(text)}
+    return {"path": str(path), "filename": path.name,
+            "text": text, "num_chars": len(text)}, ""
 
 
 # ---------------------------------------------------------------------------
@@ -243,4 +275,5 @@ def iter_source_files(settings: Settings | None = None):
 
 def load_documents(settings: Settings | None = None) -> list[dict]:
     """Extract text from every indexable file (skipping failures)."""
-    return [doc for path in iter_source_files(settings) if (doc := load_document(path))]
+    return [doc for path in iter_source_files(settings)
+            if (doc := load_document(path)[0])]

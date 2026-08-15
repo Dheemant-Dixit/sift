@@ -31,7 +31,7 @@ import numpy as np
 
 from sift.chunk import chunk_one
 from sift.config import Settings, get_settings
-from sift.ingest import load_document, scan_source
+from sift.ingest import REASON_LOCKED, file_fingerprint, load_document, scan_source
 from sift.store import IndexedChunk, VectorStore, normalize
 
 log = logging.getLogger(__name__)
@@ -100,6 +100,15 @@ class Manifest:
     def siblings_of(self, canonical_path: str) -> list[str]:
         """Other files on disk that are byte-identical copies of this one."""
         return [dup for dup, target in self.duplicates.items() if target == canonical_path]
+
+    def locked(self) -> list[str]:
+        """Files that produced no text only because they need a password.
+
+        These are the ones `sift unlock` can do something about, as distinct
+        from scanned files, which no password will help.
+        """
+        return sorted(path for path, entry in self.files.items()
+                      if entry.get("reason") == REASON_LOCKED)
 
 
 def _changed(fingerprint: dict, entry: dict | None) -> bool:
@@ -177,12 +186,15 @@ def update_index(settings: Settings | None = None,
 
         new_pieces: list[dict] = []
         for path in to_add:
-            doc = load_document(Path(path))
+            doc, reason = load_document(Path(path))
             pieces = chunk_one(doc, settings) if doc else []  # failed extraction -> 0 chunks
             new_pieces.extend(pieces)
             # Record the fingerprint even for 0-chunk files, so a scanned PDF
-            # isn't re-extracted on every future sync.
-            manifest.files[path] = {**scan.files[path], "num_chunks": len(pieces)}
+            # isn't re-extracted on every future sync. `reason` records WHY it
+            # produced nothing, so the user is told "needs a password" rather
+            # than a guess.
+            manifest.files[path] = {**scan.files[path],
+                                    "num_chunks": len(pieces), "reason": reason}
 
         if new_pieces:
             log.info("Embedding %d new/changed chunks ...", len(new_pieces))
@@ -207,6 +219,50 @@ def update_index(settings: Settings | None = None,
     stats.files_total = len(manifest.files)
     stats.seconds = round(time.time() - t0, 2)
     return stats
+
+
+def unlock_file(path: str, password: str, settings: Settings | None = None,
+                embedder: Embedder | None = None) -> tuple[int, str]:
+    """Index one password-protected file, given its password.
+
+    Returns (chunks_added, reason). A reason of "" means it worked; anything
+    else is why it didn't, using the same vocabulary as load_document — so a
+    wrong password comes back as REASON_LOCKED and a file that turns out to be
+    scanned as well as locked says so honestly.
+
+    Deliberately outside update_index(): the password exists only for the
+    length of this call, and a sync that could prompt would be unusable from
+    `sift watch` or a background service. The file's fingerprint is unchanged
+    by unlocking, so the next sync sees nothing to do and the text stays put —
+    until `--rebuild`, which is the documented cost of never storing passwords.
+    """
+    settings = settings or get_settings()
+    embed = embedder or (lambda texts: embed_texts(texts, settings))
+
+    doc, reason = load_document(Path(path), password=password)
+    if doc is None:
+        return 0, reason
+
+    store = VectorStore.load(settings=settings)
+    manifest = Manifest.load(settings=settings)
+    pieces = chunk_one(doc, settings)
+
+    store.remove_paths({path})  # idempotent: unlocking twice can't duplicate
+    if pieces:
+        vectors = normalize(embed([c["text"] for c in pieces]))
+        store.add([
+            IndexedChunk(path=c["path"], filename=c["filename"],
+                         chunk_index=c["chunk_index"], text=c["text"], vector=vector)
+            for c, vector in zip(pieces, vectors)
+        ])
+    store.save(settings=settings)
+
+    manifest.files[str(path)] = {**manifest.files.get(str(path), {}),
+                                 **file_fingerprint(Path(path)),
+                                 "num_chunks": len(pieces), "reason": ""}
+    manifest.updated_at = time.time()
+    manifest.save(settings=settings)
+    return len(pieces), ""
 
 
 def rebuild_index(settings: Settings | None = None,

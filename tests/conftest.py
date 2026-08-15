@@ -9,6 +9,7 @@ running is a test suite that fails in CI and on everyone else's machine.
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 from pathlib import Path
 
@@ -74,6 +75,65 @@ def write_file(directory: Path, name: str, content: str, age_seconds: float = 60
 def make_file(source_dir):
     def _make(name: str, content: str, age_seconds: float = 60) -> Path:
         return write_file(source_dir, name, content, age_seconds)
+    return _make
+
+
+# --- synthetic PDFs --------------------------------------------------------
+#
+# Built from bytes rather than committed as fixture files. A checked-in binary
+# can't show you why it's locked or text-free, can't be varied, and in this repo
+# would mean committing a real document. These are ~20 readable lines instead.
+
+def minimal_pdf(text: str = "") -> bytes:
+    """A valid one-page PDF. An empty `text` gives a page with no text layer,
+    which is what a scanned document looks like to pypdf."""
+    draw = f"BT /F1 12 Tf 20 100 Td ({text}) Tj ET".encode() if text else b""
+    objects = [
+        b"<</Type/Catalog/Pages 2 0 R>>",
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 300]/Contents 4 0 R"
+        b"/Resources<</Font<</F1 5 0 R>>>>>>",
+        b"<</Length %d>>stream\n%s\nendstream" % (len(draw), draw),
+        b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj" % number + body + b"endobj\n"
+    xref_at = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    for offset in offsets:
+        out += b"%010d 00000 n \n" % offset
+    out += (b"trailer<</Size %d/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n"
+            % (len(objects) + 1, xref_at))
+    return bytes(out)
+
+
+def write_pdf(directory: Path, name: str, text: str = "",
+              password: str | None = None, age_seconds: float = 60) -> Path:
+    """Write a PDF, optionally password-protected. Backdated like write_file."""
+    raw = minimal_pdf(text)
+    if password is not None:
+        from pypdf import PdfReader, PdfWriter
+        writer = PdfWriter(clone_from=PdfReader(io.BytesIO(raw)))
+        writer.encrypt(password)
+        buffer = io.BytesIO()
+        writer.write(buffer)
+        raw = buffer.getvalue()
+
+    path = directory / name
+    path.write_bytes(raw)
+    past = path.stat().st_mtime - age_seconds
+    os.utime(path, (past, past))
+    return path
+
+
+@pytest.fixture
+def make_pdf(source_dir):
+    def _make(name: str, text: str = "", password: str | None = None,
+              age_seconds: float = 60) -> Path:
+        return write_pdf(source_dir, name, text, password, age_seconds)
     return _make
 
 

@@ -15,6 +15,7 @@ from sift import find as find_module
 from sift.config import get_settings
 from sift.find import filename_score, find_files, tokenize
 from sift.index import Manifest
+from sift.ingest import REASON_LOCKED, REASON_NO_TEXT
 
 
 @pytest.fixture
@@ -32,9 +33,10 @@ def _chunk(path, score, text="some passage", index=0):
             "text": text, "score": score, "rank": 1, "id": 0}
 
 
-def _manifest_with(paths, skipped=None, duplicates=None, chunks=3):
+def _manifest_with(paths, skipped=None, duplicates=None, chunks=3, reason=""):
     manifest = Manifest(
-        files={str(p): {"size": 10, "mtime": 0, "num_chunks": chunks} for p in paths},
+        files={str(p): {"size": 10, "mtime": 0, "num_chunks": chunks,
+                        "reason": reason} for p in paths},
         skipped=skipped or {},
         duplicates=duplicates or {},
     )
@@ -108,14 +110,35 @@ def test_file_with_no_extractable_text_is_still_found_by_name(make_file, stub_se
     all for the exact file the user is looking for.
     """
     scanned = make_file("RentalAgreement.pdf", "x")
-    _manifest_with([scanned], chunks=0)
+    _manifest_with([scanned], chunks=0, reason=REASON_NO_TEXT)
     stub_search([])   # no chunks exist for it
 
     hits = find_files("rental agreement")
     assert [h.name for h in hits] == ["RentalAgreement.pdf"]
     assert hits[0].matched_on == "filename"
     assert hits[0].indexed is False
-    assert "no extractable text" in hits[0].note
+    assert "no text layer" in hits[0].note
+
+
+def test_a_locked_file_is_told_to_unlock_not_to_ocr(make_file, stub_search):
+    """The misdiagnosis, at the surface the user actually reads."""
+    statement = make_file("AccountStatement.pdf", "x")
+    _manifest_with([statement], chunks=0, reason=REASON_LOCKED)
+    stub_search([])
+
+    note = find_files("account statement")[0].note
+    assert "password-protected" in note
+    assert "sift unlock" in note
+    assert "scanned" not in note
+
+
+def test_an_old_manifest_without_a_reason_still_explains_itself(make_file, stub_search):
+    """Written before reasons were recorded: fall back, never show a blank."""
+    scanned = make_file("Scan.pdf", "x")
+    _manifest_with([scanned], chunks=0, reason="")
+    stub_search([])
+
+    assert find_files("scan")[0].note == REASON_NO_TEXT
 
 
 def test_unindexable_file_types_are_still_findable(make_file, stub_search):

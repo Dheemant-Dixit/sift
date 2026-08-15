@@ -123,7 +123,7 @@ def cmd_ask(args) -> int:
 
 def cmd_index(args) -> int:
     from sift.doctor import preflight
-    from sift.index import rebuild_index, update_index
+    from sift.index import Manifest, rebuild_index, update_index
 
     settings = get_settings()
     preflight(settings)
@@ -148,6 +148,79 @@ def cmd_index(args) -> int:
         print(f"  {stats.skipped} file(s) skipped — see `sift status --skipped`")
     if stats.deferred:
         print(f"  {stats.deferred} file(s) still downloading — run again shortly")
+
+    locked = Manifest.load(settings=settings).locked()
+    if locked:
+        print(f"  {len(locked)} file(s) need a password — run `sift unlock`")
+    return 0
+
+
+def cmd_unlock(args) -> int:
+    """Index password-protected PDFs, prompting for each password.
+
+    Separate from `sift index` on purpose: a sync that could block on a prompt
+    would be unusable from `sift watch` or a background service.
+    """
+    from getpass import getpass
+
+    from sift.doctor import preflight
+    from sift.index import Manifest, unlock_file
+    from sift.ingest import REASON_LOCKED
+
+    settings = get_settings()
+    preflight(settings)
+    manifest = Manifest.load(settings=settings)
+
+    if args.files:
+        targets = [str(Path(f).expanduser().resolve()) for f in args.files]
+    else:
+        targets = manifest.locked()
+
+    if not targets:
+        print("No password-protected files in the index — nothing to unlock.")
+        return 0
+
+    # Said before anything is asked for. Unlocking trades a protection the user
+    # deliberately has for searchability, and that should be their informed call.
+    print(f"{len(targets)} file(s) to unlock.\n")
+    print("Note: unlocking copies the document's text into sift's index, which")
+    print(f"is NOT itself encrypted:\n  {settings.index_path}")
+    print("The password is never stored, so `sift index --rebuild` will ask again.")
+    print("Press enter with no password to skip a file.\n")
+
+    unlocked = 0
+    for target in targets:
+        name = Path(target).name
+        if not Path(target).exists():
+            print(f"  ! {name}: no such file")
+            continue
+
+        for attempt in range(3):
+            try:
+                password = getpass(f"  password for {name}: ")
+            except (EOFError, KeyboardInterrupt):
+                print("\nStopped.")
+                return 1
+            if not password:
+                print(f"  · {name}: skipped")
+                break
+
+            added, reason = unlock_file(target, password, settings=settings)
+            if not reason:
+                print(f"  ✓ {name}: {added} chunks indexed")
+                unlocked += 1
+                break
+            if reason == REASON_LOCKED:
+                remaining = 2 - attempt
+                print("  ! wrong password"
+                      + (f", {remaining} attempt(s) left" if remaining else ""))
+            else:
+                # Opened fine, but there was nothing to read — a scanned file
+                # that also happened to be locked. No password will fix that.
+                print(f"  ! {name}: {reason}")
+                break
+
+    print(f"\n{unlocked} file(s) unlocked." if unlocked else "\nNothing unlocked.")
     return 0
 
 
@@ -189,13 +262,23 @@ def cmd_status(args) -> int:
     if manifest.updated_at:
         print(f"last synced {human_age(manifest.updated_at)}")
 
-    empty = [p for p, e in manifest.files.items() if not e.get("num_chunks")]
-    if empty:
-        print(f"\n{len(empty)} file(s) had no extractable text (findable by name only):")
-        for path in sorted(empty)[:10]:
+    # Grouped by WHY, not lumped together: a locked file needs a password and a
+    # scanned one needs OCR, and telling someone the wrong one wastes their time.
+    from sift.ingest import REASON_LOCKED, REASON_NO_TEXT
+
+    by_reason: dict[str, list[str]] = {}
+    for path, entry in manifest.files.items():
+        if not entry.get("num_chunks"):
+            by_reason.setdefault(entry.get("reason") or REASON_NO_TEXT, []).append(path)
+
+    for reason, paths in sorted(by_reason.items()):
+        print(f"\n{len(paths)} file(s) — {reason} (findable by name only):")
+        for path in sorted(paths)[:10]:
             print(f"  · {Path(path).name}")
-        if len(empty) > 10:
-            print(f"  ... and {len(empty) - 10} more")
+        if len(paths) > 10:
+            print(f"  ... and {len(paths) - 10} more")
+        if reason == REASON_LOCKED:
+            print("  → sift unlock     to read these")
 
     if manifest.duplicates:
         print(f"\n{len(manifest.duplicates)} duplicate file(s) collapsed")
@@ -354,6 +437,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_status = subparsers.add_parser("status", parents=[common], help="what's indexed right now")
     p_status.add_argument("--skipped", action="store_true", help="list every skipped file")
     p_status.set_defaults(func=cmd_status)
+
+    p_unlock = subparsers.add_parser(
+        "unlock", parents=[common], help="index password-protected PDFs",
+        description="Prompts for the password of each locked file and indexes "
+                    "its text. The password is never stored, so a --rebuild "
+                    "will ask again.")
+    p_unlock.add_argument("files", nargs="*",
+                          help="specific files (default: every locked file)")
+    p_unlock.set_defaults(func=cmd_unlock)
 
     p_doctor = subparsers.add_parser("doctor", parents=[common],
                                      help="check the setup and say how to fix it")
