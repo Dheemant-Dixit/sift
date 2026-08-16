@@ -14,10 +14,11 @@ caught while it is still free.
 ## Contents
 
 - [One-time setup](#one-time-setup-trusted-publishing) — required before the first release
-- [Releasing](#releasing-1) — the four steps
+- [Releasing](#releasing-1) — the five steps
 - [Checking the setup without publishing](#checking-the-setup-without-publishing)
 - [What actually runs](#what-actually-runs)
 - [What the workflow refuses to do](#what-the-workflow-refuses-to-do)
+- [What the repository refuses to do](#what-the-repository-refuses-to-do) — the rules outside the workflow
 - [Prereleases](#prereleases)
 - [If something goes wrong](#if-something-goes-wrong)
 - [Changing the release workflow](#changing-the-release-workflow) — read before renaming anything
@@ -57,13 +58,35 @@ The environment name matters: the workflow declares `environment: pypi`, and if
 PyPI is told to expect it, an upload from any *other* job in the repository is
 rejected even if that job is otherwise legitimate.
 
-**Optional, recommended:** in GitHub → Settings → Environments → `pypi`, add
-yourself as a required reviewer. Everything up to the upload then runs
-unattended, and the irreversible step waits for a click. The workflow already
-has the environment declared, so this needs no code change.
+**The `pypi` environment gates on a human.** Configured 2026-08-17 in GitHub →
+Settings → Environments → `pypi`; no code change was needed, since the workflow
+already declares `environment: pypi`. Everything up to the upload runs
+unattended, and the irreversible step waits for a click.
 
-Once this is done, **revoke any PyPI API token you were using before.** Leaving
-it alive keeps exactly the risk trusted publishing was adopted to remove.
+| Setting | Value | Why |
+|---|---|---|
+| Required reviewers | `Dheemant-Dixit` | the upload waits for an explicit approval |
+| Allow administrators to bypass | **off** | otherwise the approval is a prompt, not a gate |
+| Prevent self-review | **off** | must stay off — see below |
+| Deployment refs | tag `v*` **and** branch `main` | see below |
+
+Two of those are load-bearing in a way that is easy to get backwards:
+
+- **Prevent self-review must stay off.** There is one maintainer, and that
+  maintainer is the only reviewer. Turning it on means no deployment can ever be
+  approved by anyone, which does not make releases safer — it makes them
+  impossible, permanently.
+- **Branch `main` must stay in the deployment refs**, alongside the `v*` tags.
+  It looks redundant, since a release only ever runs from a tag. But
+  `verify-publisher` runs on `workflow_dispatch` from `main` and *must* live in
+  the `pypi` environment (PyPI matches the environment name out of the token
+  claims). Restrict this to tags and the release path still works while the only
+  safe way to test it stops working.
+
+Once trusted publishing is registered, **revoke any PyPI API token you were
+using before.** Leaving it alive keeps exactly the risk trusted publishing was
+adopted to remove: none of the rules on this page can see a `twine upload` run
+from a laptop.
 
 ---
 
@@ -75,16 +98,26 @@ it alive keeps exactly the risk trusted publishing was adopted to remove.
 2. Add a `## X.Y.Z — YYYY-MM-DD` section to `CHANGELOG.md`. Its body becomes
    the GitHub release notes **verbatim**, so write it for a reader who has not
    seen the diff.
-3. Merge both to `main` with CI green.
+3. Merge both to `main` **through a pull request** with CI green. `main` is
+   protected — see [what the repository refuses to
+   do](#what-the-repository-refuses-to-do) — so there is no direct-push path,
+   and the release's own ancestry guard means anything not on `main` cannot be
+   published anyway.
 4. Tag and push:
 
    ```bash
    git tag vX.Y.Z
    git push origin vX.Y.Z
    ```
+5. **Approve the deployment.** When `preflight`, `CI` and `build` are green the
+   `pypi` job stops and waits: Actions → the running release → **Review
+   deployments** → `pypi` → *Approve and deploy*. Nothing is uploaded until
+   this click, and it cannot be skipped — administrator bypass is off.
 
-Watch it at Actions → Release. It takes roughly three to five minutes, most of
-it the test matrix.
+Watch it at Actions → Release. Roughly three to five minutes of machine time,
+most of it the test matrix, plus however long the approval sits waiting. A
+release will **not** finish while you are away from the keyboard; that is the
+point of the gate, not a bug in it.
 
 **Do not run `python -m build` or `twine upload` by hand.** A version published
 outside the workflow has skipped every check below, and cannot be replaced.
@@ -114,6 +147,11 @@ Running the Release workflow by hand does **not** release. It runs only
 exchanges it with PyPI, and throws the result away. Nothing is checked out,
 built or uploaded, so it is safe to run whenever you want to know whether the
 registration is still good.
+
+**It now waits for a deployment approval too**, because it deliberately runs in
+the `pypi` environment — which is exactly what makes it a faithful test. Approve
+it the same way as a real release. `gh run watch` will appear to hang until you
+do.
 
 This is worth having because the registration is the one part of the release
 path that lives outside this repository — reading `release.yml` cannot tell you
@@ -189,6 +227,48 @@ pushing one checks nothing. So:
 
 ---
 
+## What the repository refuses to do
+
+Everything above is enforced by `release.yml`, which means it is enforced only
+for things that go *through* `release.yml`. A guard written in a workflow cannot
+stop someone from bypassing the workflow. These rules live in repository
+settings instead, and apply to pushes themselves.
+
+Configured 2026-08-17. All of them have an **empty bypass list** — they apply to
+the repository owner exactly as they apply to anyone else.
+
+| Where | Rule | Stops |
+|---|---|---|
+| `main` | pull request required, 0 approvals | pushing straight to the branch releases are cut from |
+| `main` | all 10 CI contexts must pass, branch up to date | merging something the matrix has not seen |
+| `main` | squash only, linear history | a merge commit making `--is-ancestor` ambiguous |
+| `main` | no force-push, no deletion | rewriting history under an already-published tag |
+| `refs/tags/v*` | no update, no force-move | a tag that no longer describes what PyPI shipped |
+| `pypi` env | required reviewer, admins cannot bypass | an unattended upload |
+| `pypi` env | deploys only from `v*` tags or `main` | a workflow on some other ref minting an upload token |
+
+The tag rule is the one worth understanding. PyPI cannot un-publish a version,
+so after a release the tag is the only durable record of *which commit* became
+that version. If the tag can move, that record can be made to lie — silently,
+and after the fact. Creating and deleting tags is still allowed, because the
+[recovery path](#a-guard-failed-preflight-ci-or-build) needs it; only moving one
+is refused.
+
+**What is not enforced here:** the tag *name* pattern. `tag_name_pattern` is a
+GitHub "metadata restriction", available only to organizations on Team or
+Enterprise — on a personal repository the API rejects it with
+`422 Invalid rule 'tag_name_pattern'`. So a malformed tag like `v1.0` can still
+be created; it is caught about ten seconds later by preflight, and then has to
+be deleted. The regex in `release.yml` is the only thing enforcing the format.
+
+To change any of this: Settings → Rules → Rulesets, and Settings →
+Environments → `pypi`. **If the CI matrix changes, update the required contexts
+in the same place** — a required status check that never reports blocks every
+merge, and with no bypass configured there is no way around it but to edit the
+rule.
+
+---
+
 ## Prereleases
 
 Tags of the form `v0.3.0rc1`, `v0.3.0b2`, `v0.3.0a1` are supported and take the
@@ -213,18 +293,30 @@ when you genuinely want early feedback, not as a way to test the workflow — se
 
 ### A guard failed (preflight, CI, or build)
 
-Nothing was published. Fix it on `main`, then move the tag:
+Nothing was published. Fix it on `main`, then **delete and re-create** the tag:
 
 ```bash
 git tag -d vX.Y.Z && git push --delete origin vX.Y.Z
-# ...fix, merge to main...
+# ...fix, merge to main via PR...
 git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
+Delete-then-recreate, not `git push -f`. A `v*` tag cannot be moved — the
+obvious shortcut is rejected by the remote:
+
+```
+git tag -f vX.Y.Z && git push -f origin vX.Y.Z
+remote: - Cannot update this protected ref.
+ ! [remote rejected] vX.Y.Z -> vX.Y.Z (push declined due to repository rule violations)
+```
+
+That rejection is deliberate and there is no bypass, including for the owner.
+Deleting a tag is still allowed precisely so this recovery keeps working.
+
 This is safe **only** because the guards run before the upload. Once a version
-is on PyPI, moving its tag is not an option: ship the correction as the next
-version. That is why `0.1.0` was never published and the corrected code went
-out as `0.1.1`.
+is on PyPI the tag must never be deleted or re-pointed at all — ship the
+correction as the next version. That is why `0.1.0` was never published and the
+corrected code went out as `0.1.1`.
 
 ### The upload failed partway
 
@@ -269,7 +361,7 @@ release is broken, don't install it", never for "I want to re-upload".
 
 ## Changing the release workflow
 
-Three changes look harmless and are not. Each breaks releases silently — the
+Four changes look harmless and are not. Each breaks releases silently — the
 workflow keeps passing until the moment it has to publish.
 
 1. **Renaming `release.yml`, or moving the publish job to another workflow
@@ -280,6 +372,14 @@ workflow keeps passing until the moment it has to publish.
    it as a reusable workflow. Drop the trigger and the release's `CI` job fails
    to resolve.
 3. **Renaming the default branch.** The ancestry guard hardcodes `origin/main`.
+   The `pypi` environment's deployment refs also name `main` explicitly, and the
+   branch ruleset follows the default branch automatically — so a rename leaves
+   those two disagreeing.
+4. **Tightening the `pypi` environment's deployment refs to tags only.** It
+   looks like an obvious hardening, and it is the one change here that breaks
+   the *check* rather than the release: `verify-publisher` dispatches from
+   `main`, so it would start failing while real releases carried on working —
+   removing the early warning for #1 exactly when it is most needed.
 
 After any change to `release.yml`, run
 [the verify job](#checking-the-setup-without-publishing) — it is free and it
