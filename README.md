@@ -304,6 +304,11 @@ are any good. [`evals/`](evals/) is that second suite: a small synthetic corpus
 that reproduces the two wrong-entity failures 0.2.0 fixed, so they can't come
 back unnoticed. It isn't run in CI, because it needs a model server.
 
+Releases go out by pushing a `vX.Y.Z` tag — the workflow checks the tag against
+the packaged version, the changelog and `main` before it publishes anything, and
+uploads to PyPI without an API token existing anywhere. See
+[docs/RELEASING.md](docs/RELEASING.md).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

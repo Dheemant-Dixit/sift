@@ -1,0 +1,275 @@
+name: Release
+
+# Pushing a `vX.Y.Z` tag publishes that version to PyPI and opens a GitHub
+# release for it. Nothing else triggers a publish — no manual dispatch, no
+# push to main — because a PyPI version number can never be reused, so the
+# thing that starts an irreversible upload should be a single deliberate act.
+#
+# The interesting part of this file is not the upload; that is four lines. It
+# is everything before it. A tag is a *claim* that the code at that commit is
+# version X.Y.Z, and nothing about pushing a tag checks the claim. So:
+#
+#   preflight  the tag parses, agrees with the packaged version, sits on main,
+#              and has a changelog entry — all in ~15s, before anything slow
+#   test       the full CI matrix, on the tagged commit itself
+#   build      artifacts audited for the document text sift is not allowed to ship
+#   pypi       trusted publishing: no API token exists to leak
+#   release    only after PyPI accepted, so a release never points at nothing
+#
+# ONE-TIME SETUP — see docs/RELEASING.md. This workflow cannot publish until a
+# trusted publisher for it is registered on pypi.org.
+
+on:
+  push:
+    tags: ["v*"]
+
+# Granted per job instead, so the ordinary jobs cannot touch anything.
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Needed by the ancestry check below: a shallow clone cannot answer
+          # "is this commit on main?".
+          fetch-depth: 0
+
+      # GITHUB_REF_NAME rather than ${{ github.ref_name }}: workflow
+      # expressions are pasted into the script before the shell sees it, so a
+      # tag containing shell syntax would be executed rather than compared.
+      - name: The tag names a version
+        id: tag
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?$'; then
+            echo "::error::tag '$GITHUB_REF_NAME' is not vMAJOR.MINOR.PATCH (optionally aN/bN/rcN)"
+            exit 1
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # 0.3.0rc1 and friends get flagged so GitHub doesn't offer them as
+          # the current release. PyPI works this out for itself from the name.
+          if printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The failure this exists for: tagging v0.3.0 while __init__.py still
+      # says 0.2.0. PyPI would reject the duplicate, but only sometimes — bump
+      # to 0.2.1, tag v0.3.0, and it publishes 0.2.1 under a release everyone
+      # will read as 0.3.0. Read the same way hatchling reads it; pyproject.toml
+      # takes its version from this file, so there is only the one to check.
+      - name: The tag agrees with the packaged version
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          packaged=$(python - <<'PY'
+          import pathlib, re, sys
+          source = pathlib.Path("src/sift_downloads/__init__.py").read_text(encoding="utf-8")
+          match = re.search(r'^__version__ = "([^"]+)"', source, re.M)
+          if not match:
+              sys.exit("no __version__ in src/sift_downloads/__init__.py")
+          print(match.group(1))
+          PY
+          )
+          if [ "$packaged" != "$VERSION" ]; then
+            echo "::error::tag says $VERSION, __version__ says $packaged"
+            exit 1
+          fi
+          echo "both say $VERSION"
+
+      # A tag can be pushed from any commit, including one that never opened a
+      # pull request. Everything on PyPI should have been through review and a
+      # green matrix on main first, and unlike a bad branch a bad version
+      # number cannot be taken back.
+      - name: The tagged commit is on main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_SHA is not an ancestor of origin/main — refusing to publish"
+            exit 1
+          fi
+
+      # Doubles as the release notes and as a check that the release was
+      # actually written up before it was tagged.
+      - name: The changelog describes this version
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          python - "$VERSION" > release-notes.md <<'PY'
+          import pathlib, re, sys
+          version = sys.argv[1]
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          # From this version's heading to the next `## ` heading, or the end.
+          # The lookahead is whitespace-or-end rather than \b, so looking up
+          # "0.2" cannot silently return the section for "0.2.0".
+          section = re.search(
+              rf"^## {re.escape(version)}(?=[ \t]|$)[^\n]*\n(.*?)(?=^## |\Z)",
+              text, re.M | re.S)
+          if section is None or not section.group(1).strip():
+              sys.exit(f"CHANGELOG.md has no section for {version}")
+          sys.stdout.write(section.group(1).strip() + "\n")
+          PY
+          echo "::notice::release notes: $(wc -l < release-notes.md) lines"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  # The same matrix CI runs on main, against the tagged commit. It already
+  # passed there, but only for whatever main pointed at then; this asserts it
+  # for the tree actually being packaged.
+  test:
+    name: CI
+    needs: preflight
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  build:
+    name: Build
+    needs: preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Build
+        run: |
+          pip install --quiet build twine
+          python -m build
+
+      # `twine check` is about the description rendering on PyPI, which is the
+      # one thing you cannot fix after uploading.
+      - name: Check the metadata
+        run: twine check --strict dist/*
+
+      - name: The artifacts carry the tagged version
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          ls -l dist/
+          test -f "dist/sift_downloads-$VERSION-py3-none-any.whl"
+          test -f "dist/sift_downloads-$VERSION.tar.gz"
+          # Exactly those two and nothing else — a stale artifact left in dist/
+          # would be uploaded alongside them and could never be replaced.
+          built=(dist/*)
+          test "${#built[@]}" -eq 2
+
+      # sift's index holds the verbatim text of the user's documents, so an
+      # .npz reaching PyPI would publish someone's bank statements. Nothing
+      # builds one into the package and .gitignore covers them, but this is a
+      # release path: cheap to assert, unfixable if it ever happens.
+      - name: No document text or secrets in the artifacts
+        run: |
+          set -euo pipefail
+          contents=$( (python -m zipfile -l dist/*.whl; tar -tzf dist/*.tar.gz) 2>&1 )
+          # Anchored at end-of-name on purpose: `.env.example` is documentation
+          # and ships deliberately, so an unanchored `\.env` would fail every
+          # release. It did, the first time this was run.
+          if printf '%s' "$contents" | grep -Ei '\.npz$|(^|/)\.env$|(^|/)manifest\.v[0-9]+.*\.json$'; then
+            echo "::error::an index, manifest or dotenv is inside the distribution"
+            exit 1
+          fi
+          echo "clean"
+
+      # A wheel that installs but whose entry point is broken is a bad release
+      # the test matrix cannot see: it tests the source tree, not the artifact.
+      - name: The built wheel installs and runs
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet "dist/sift_downloads-$VERSION-py3-none-any.whl"
+          reported=$(/tmp/smoke/bin/sift --version)
+          echo "$reported"
+          test "$reported" = "sift $VERSION"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    name: Publish to PyPI
+    needs: [preflight, test, build]
+    runs-on: ubuntu-latest
+    # Named so PyPI's trusted publisher can be scoped to it, and so a required
+    # reviewer can be added in repo settings without touching this file.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/sift-downloads/${{ needs.preflight.outputs.version }}
+    permissions:
+      # The whole point of trusted publishing: this job mints a short-lived
+      # OIDC token that PyPI exchanges for an upload token scoped to this
+      # project. There is no long-lived API token in repository secrets to
+      # leak, rotate, or accidentally print into a log.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: GitHub release
+    # After pypi, not alongside it: a release announcing a version that failed
+    # to upload is worse than no release.
+    needs: [preflight, pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      # Artifacts are attached so the release is checkable on its own — the
+      # same files PyPI got, with GitHub's checksums beside them.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "sift $VERSION" \
+            --notes-file release-notes.md \
+            "${flags[@]}" \
+            dist/*
