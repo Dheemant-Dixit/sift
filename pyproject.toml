@@ -40,7 +40,9 @@ dependencies = [
 
 [project.optional-dependencies]
 watch = ["watchdog>=4.0"]
-dev = ["pytest>=8.0"]
+# pytest-randomly shuffles test order every run, which is what catches tests
+# that only pass because an earlier one left state behind.
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "pytest-randomly>=3.15"]
 
 [project.urls]
 Homepage = "https://github.com/Dheemant-Dixit/sift"
@@ -57,3 +59,12 @@ packages = ["src/sift_downloads"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--strict-markers"
+
+[tool.coverage.run]
+source = ["src/sift_downloads"]
+
+[tool.coverage.report]
+# ui.py's prompt_toolkit key bindings and event loop, and the Windows-only
+# ctypes probe in config.py, are the deliberate gaps — see tests/README.md.
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]

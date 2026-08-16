@@ -51,6 +51,31 @@ def isolated_settings(tmp_path, monkeypatch):
     config.reset()  # cannot raise, even if the test left settings invalid
 
 
+@pytest.fixture(autouse=True)
+def no_model_server(monkeypatch):
+    """Make reaching a model server impossible, rather than merely unusual.
+
+    Autouse and unconditional. Passing a fake embedder to the function under
+    test is easy to do in most places and easy to forget in one — and the
+    forgotten test still passes on a laptop with Ollama running, then fails in
+    CI. Six tests were written that way before this existed.
+
+    A test that legitimately exercises an embedding path replaces the seam it
+    needs (`index.embed_texts`, or an `embedder=` argument); anything that
+    reaches litellm itself is a mistake and says so here.
+    """
+    import litellm
+
+    def refuse(*args, **kwargs):
+        raise AssertionError(
+            "this test reached litellm, which means it needs a model server.\n"
+            "Pass embedder=fake_embed, or monkeypatch index.embed_texts."
+        )
+
+    monkeypatch.setattr(litellm, "embedding", refuse)
+    monkeypatch.setattr(litellm, "completion", refuse)
+
+
 @pytest.fixture
 def source_dir(isolated_settings) -> Path:
     return isolated_settings.source_dir

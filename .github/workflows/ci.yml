@@ -46,3 +46,28 @@ jobs:
         run: |
           sift --version
           sift --help
+
+  # Coverage is gated on ONE job, not all nine. Per-OS coverage legitimately
+  # differs — the ctypes probe in config.py only executes on Windows, and each
+  # platform branch of open_file.py runs only where it applies — so a single
+  # threshold across the matrix would either be too low to mean anything or
+  # fail on the platforms it wasn't measured against.
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[watch,dev]"
+
+      # The floor sits a little under the current figure so ordinary churn
+      # doesn't fail the build, while a module losing its tests still does.
+      # Deliberate gaps (prompt_toolkit's event loop, the Windows-only ctypes
+      # probe) are documented in tests/README.md.
+      - name: Test with coverage
+        run: pytest -q --cov=sift_downloads --cov-report=term-missing --cov-fail-under=92
