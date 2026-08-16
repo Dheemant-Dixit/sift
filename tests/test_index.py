@@ -327,3 +327,67 @@ def test_a_manifest_written_before_reasons_existed_still_loads(make_file, embedd
     manifest.save()
 
     assert Manifest.load().locked() == []
+
+
+# --- embed_texts: the one place that talks to a model ----------------------
+
+def _fake_embedding_response(n_vectors, dim=4):
+    from types import SimpleNamespace
+    return SimpleNamespace(data=[{"embedding": [0.1] * dim} for _ in range(n_vectors)])
+
+
+def test_embed_texts_returns_one_row_per_text(monkeypatch):
+    import litellm
+    from sift_downloads.index import embed_texts
+    monkeypatch.setattr(litellm, "embedding",
+                        lambda model, input: _fake_embedding_response(len(input)))
+    assert embed_texts(["a", "b", "c"]).shape == (3, 4)
+
+
+def test_embed_texts_is_float32(monkeypatch):
+    """The store asserts on dtype; a float64 matrix doubles the index size."""
+    import litellm
+    import numpy as np
+    from sift_downloads.index import embed_texts
+    monkeypatch.setattr(litellm, "embedding",
+                        lambda model, input: _fake_embedding_response(len(input)))
+    assert embed_texts(["a"]).dtype == np.float32
+
+
+def test_embed_texts_batches_long_inputs(monkeypatch):
+    """One request per 64 chunks, not one per chunk and not one giant request."""
+    import litellm
+    from sift_downloads.index import embed_texts
+    sizes = []
+
+    def spy(model, input):
+        sizes.append(len(input))
+        return _fake_embedding_response(len(input))
+
+    monkeypatch.setattr(litellm, "embedding", spy)
+    embed_texts([f"chunk {i}" for i in range(150)], batch_size=64)
+    assert sizes == [64, 64, 22]
+
+
+def test_embed_texts_uses_the_configured_model(monkeypatch):
+    import litellm
+    from sift_downloads.config import configure
+    from sift_downloads.index import embed_texts
+    seen = {}
+
+    def spy(model, input):
+        seen["model"] = model
+        return _fake_embedding_response(len(input))
+
+    monkeypatch.setattr(litellm, "embedding", spy)
+    configure(embed_model="ollama/some-model")
+    embed_texts(["a"])
+    assert seen["model"] == "ollama/some-model"
+
+
+def test_embedding_nothing_makes_no_request(monkeypatch):
+    import litellm
+    from sift_downloads.index import embed_texts
+    monkeypatch.setattr(litellm, "embedding",
+                        lambda **kw: pytest.fail("no texts means no request"))
+    assert len(embed_texts([])) == 0

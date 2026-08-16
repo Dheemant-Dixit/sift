@@ -18,3 +18,7 @@ build/
 
 # os
 .DS_Store
+
+# coverage
+.coverage
+htmlcov/
