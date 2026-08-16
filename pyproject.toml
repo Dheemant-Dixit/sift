@@ -58,8 +58,14 @@ sift = "sift_downloads.cli:main"
 packages = ["src/sift_downloads"]
 
 [tool.pytest.ini_options]
+# testpaths deliberately excludes evals/: those need Ollama and a chat model,
+# take a minute, and are not deterministic enough to gate a merge. Run them
+# with `pytest evals/`. See evals/README.md.
 testpaths = ["tests"]
 addopts = "--strict-markers"
+markers = [
+    "eval: answer-quality check against a real model (needs Ollama; not run in CI)",
+]
 
 [tool.coverage.run]
 source = ["src/sift_downloads"]
