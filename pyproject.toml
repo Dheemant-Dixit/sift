@@ -4,7 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sift-downloads"
-version = "0.2.0"
+# Read from src/sift_downloads/__init__.py — see [tool.hatch.version] below.
+dynamic = ["version"]
 description = "Ask your Downloads folder where a file is — and what it says. Runs entirely on your machine."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -56,6 +57,16 @@ sift = "sift_downloads.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sift_downloads"]
+
+# One version, in one place. It used to be written twice — here and in
+# __init__.py — and nothing checked that the two agreed. That matters more than
+# tidiness now that a git tag triggers a PyPI upload: a release is a claim that
+# tag == version, PyPI never lets a version number be reused, and a guard
+# against a duplicate you can simply delete is the wrong shape of fix.
+# hatchling greps the file for `__version__ = "..."`; it does not import it,
+# so the litellm env-var side effect at the top of __init__.py never runs here.
+[tool.hatch.version]
+path = "src/sift_downloads/__init__.py"
 
 [tool.pytest.ini_options]
 # testpaths deliberately excludes evals/: those need Ollama and a chat model,
