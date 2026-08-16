@@ -1,0 +1,87 @@
+Employee Name: PRIYA NATARAJAN   Designation: STAFF DATA ENGINEER   Employer: ACME CLOUD SYSTEMS PRIVATE LIMITED
+
+FORM NO. 16
+[See rule 31(1)(a)]
+PART A
+Certificate under section 203 of the Income-tax Act, 1961 for tax deducted at
+source on salary paid to an employee.
+
+Name and address of the Employer
+ACME CLOUD SYSTEMS PRIVATE LIMITED
+Level 9, Meridian Tech Park, Outer Ring Road
+Bengaluru 560103, Karnataka
+
+Name and address of the Employee
+PRIYA NATARAJAN
+Flat 704, Sunwood Residency, Kadubeesanahalli
+Bengaluru 560103, Karnataka
+
+PAN of the Deductor        TAN of the Deductor        PAN of the Employee
+AAACA1234K                 BLRA98765C                 QWERT5678Z
+
+Assessment Year            Period with the Employer
+2026-27                    01-Apr-2025 to 31-Mar-2026
+
+SUMMARY OF AMOUNT PAID AND TAX DEDUCTED
+Quarter 1    Receipt Number QRTA1001    Amount Paid 6,15,000    Tax Deducted 71,400
+Quarter 2    Receipt Number QRTA1002    Amount Paid 6,15,000    Tax Deducted 71,400
+Quarter 3    Receipt Number QRTA1003    Amount Paid 6,42,500    Tax Deducted 78,900
+Quarter 4    Receipt Number QRTA1004    Amount Paid 6,42,500    Tax Deducted 78,900
+Total                                   Amount Paid 25,15,000   Tax Deducted 3,00,600
+
+PART B (ANNEXURE)
+DETAILS OF SALARY PAID AND ANY OTHER INCOME AND TAX DEDUCTED
+
+1. Gross Salary
+   (a) Salary as per provisions contained in section 17(1)     25,15,000
+   (b) Value of perquisites under section 17(2)                     42,000
+   (c) Profits in lieu of salary under section 17(3)                     0
+   (d) Total                                                    25,57,000
+
+2. Less: Allowances to the extent exempt under section 10
+   House Rent Allowance                                          3,60,000
+   Leave Travel Allowance                                           48,000
+   Total Exemption                                               4,08,000
+
+3. Balance (1 - 2)                                              21,49,000
+
+4. Deductions under section 16
+   (a) Standard Deduction                                           50,000
+   (b) Tax on Employment                                             2,400
+   Total                                                            52,400
+
+5. Income chargeable under the head Salaries                    20,96,600
+
+6. Deductions under Chapter VI-A
+   (a) Deduction in respect of life insurance premia,
+       contributions to provident fund etc. under section 80C
+       Employee Provident Fund contribution                       1,08,000
+       Life Insurance Premium                                       42,000
+       Gross Amount 1,50,000    Deductible Amount 1,50,000
+   (b) Deduction in respect of health insurance premia
+       under section 80D                                            25,000
+   Aggregate of deductible amounts under Chapter VI-A            1,75,000
+
+7. Total Income                                                 19,21,600
+
+8. Tax on Total Income                                           3,88,980
+9. Rebate and relief                                                     0
+10. Net tax payable                                              3,88,980
+11. Total amount of tax deducted at source                       3,00,600
+12. Balance tax payable by the employee                             88,380
+
+VERIFICATION
+
+I, ANJALI VERMA, daughter of SURESH VERMA, working in the capacity of
+SENIOR PAYROLL CONTROLLER (designation) do hereby certify that a sum of
+INR 3,00,600 (Rupees Three Lakh Six Hundred only) has been deducted and
+deposited to the credit of the Central Government. I further certify that the
+information given above is true, complete and correct and is based on the books
+of account, documents, TDS statements, TDS deposited and other available
+records.
+
+Place: Bengaluru
+Date: 15-Jun-2026
+Signature of the person responsible for deduction of tax
+Full Name: ANJALI VERMA
+Designation: SENIOR PAYROLL CONTROLLER

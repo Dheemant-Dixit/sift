@@ -294,10 +294,15 @@ bar, and the full limitations.
 
 ```bash
 pip install -e ".[watch,dev]"
-pytest
+pytest            # unit suite: no Ollama, touches no real folder
+pytest evals/     # answer quality: needs Ollama, ~40s
 ```
 
-The tests need no Ollama and touch no real folder.
+The unit suite proves the code does what it says. It deliberately cannot reach
+a model — real embedding calls raise — so it can't tell you whether the answers
+are any good. [`evals/`](evals/) is that second suite: a small synthetic corpus
+that reproduces the two wrong-entity failures 0.2.0 fixed, so they can't come
+back unnoticed. It isn't run in CI, because it needs a model server.
 
 ## License
 
