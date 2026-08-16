@@ -1,9 +1,29 @@
 # Releasing
 
 Pushing a `vX.Y.Z` tag publishes that version to PyPI and opens a GitHub
-release. That is the whole procedure — but it will not work until the one-time
-setup below is done, and it is worth understanding what the workflow refuses to
-do before relying on it.
+release. That is the whole procedure.
+
+This document is longer than the procedure because the interesting parts are
+the failure modes. PyPI **never lets a version number be reused** — not after a
+yank, not after a delete — so a release is the one operation in this project
+that cannot be undone. Almost everything below exists to make sure a mistake is
+caught while it is still free.
+
+---
+
+## Contents
+
+- [One-time setup](#one-time-setup-trusted-publishing) — required before the first release
+- [Releasing](#releasing-1) — the four steps
+- [Checking the setup without publishing](#checking-the-setup-without-publishing)
+- [What actually runs](#what-actually-runs)
+- [What the workflow refuses to do](#what-the-workflow-refuses-to-do)
+- [Prereleases](#prereleases)
+- [If something goes wrong](#if-something-goes-wrong)
+- [Changing the release workflow](#changing-the-release-workflow) — read before renaming anything
+- [What this does not check](#what-this-does-not-check)
+
+---
 
 ## One-time setup: trusted publishing
 
@@ -30,6 +50,9 @@ Register the publisher once, on
 | Workflow name | `release.yml` |
 | Environment name | `pypi` |
 
+> **Status:** registered and verified on 2026-08-16. If you are reading this on
+> a fork, it is not registered for you — do it before tagging.
+
 The environment name matters: the workflow declares `environment: pypi`, and if
 PyPI is told to expect it, an upload from any *other* job in the repository is
 rejected even if that job is otherwise legitimate.
@@ -38,6 +61,46 @@ rejected even if that job is otherwise legitimate.
 yourself as a required reviewer. Everything up to the upload then runs
 unattended, and the irreversible step waits for a click. The workflow already
 has the environment declared, so this needs no code change.
+
+Once this is done, **revoke any PyPI API token you were using before.** Leaving
+it alive keeps exactly the risk trusted publishing was adopted to remove.
+
+---
+
+## Releasing
+
+1. Bump `__version__` in `src/sift_downloads/__init__.py`. That is the only
+   place a version is written — `pyproject.toml` reads it from there via
+   `[tool.hatch.version]`, so the two cannot drift.
+2. Add a `## X.Y.Z — YYYY-MM-DD` section to `CHANGELOG.md`. Its body becomes
+   the GitHub release notes **verbatim**, so write it for a reader who has not
+   seen the diff.
+3. Merge both to `main` with CI green.
+4. Tag and push:
+
+   ```bash
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+
+Watch it at Actions → Release. It takes roughly three to five minutes, most of
+it the test matrix.
+
+**Do not run `python -m build` or `twine upload` by hand.** A version published
+outside the workflow has skipped every check below, and cannot be replaced.
+
+### Before you tag, sanity-check locally
+
+```bash
+pytest            # must be green
+pytest evals/     # answer quality — CI cannot run this, and a release should not skip it
+```
+
+The eval suite needs Ollama and is not part of CI, so a tag push will happily
+publish a version whose answers got worse. This is the one quality gate that is
+your responsibility rather than the workflow's.
+
+---
 
 ## Checking the setup without publishing
 
@@ -69,35 +132,37 @@ than in a workflow of its own. PyPI matches the workflow *filename* and the
 environment name out of the token's claims, so a check running from anywhere
 else would pass while the real publish still failed.
 
-## Releasing
+---
 
-1. Bump `__version__` in `src/sift_downloads/__init__.py`. That is the only
-   place a version is written — `pyproject.toml` reads it from there via
-   `[tool.hatch.version]`, so the two cannot drift.
-2. Add a `## X.Y.Z — YYYY-MM-DD` section to `CHANGELOG.md`. Its body becomes
-   the GitHub release notes verbatim, so write it for a reader who has not seen
-   the diff.
-3. Merge both to `main` with CI green.
-4. Tag and push:
+## What actually runs
 
-   ```bash
-   git tag vX.Y.Z
-   git push origin vX.Y.Z
-   ```
+```
+tag push  ──▶ preflight ──┬──▶ CI (reusable call to ci.yml, 10 jobs)  ──┐
+                          └──▶ build                                    ├──▶ pypi ──▶ github-release
+                                                                        ┘
+manual run ──▶ verify-publisher        (nothing else; all five above are skipped)
+```
 
-Watch it at Actions → Release. Nothing else is manual; in particular, do not
-run `python -m build` or `twine upload` by hand any more. A version published
-outside the workflow has skipped every check below.
+| Job | Does | Fails cost |
+|---|---|---|
+| `preflight` | four guards, ~15s | delete tag, re-push |
+| `CI` | the same 10 jobs as a PR, on the tagged commit | delete tag, re-push |
+| `build` | build, `twine check --strict`, filename check, content audit, clean-venv install | delete tag, re-push |
+| `pypi` | trusted-publishing upload | see [partial upload](#the-upload-failed-partway) |
+| `github-release` | `gh release create` with the changelog section and both artifacts attached | re-run the job |
+
+The guards are ordered cheap-first on purpose: a mistyped tag stops in about
+ten seconds rather than after the full matrix. `github-release` runs *after*
+`pypi` so a release never announces a version that failed to upload.
+
+---
 
 ## What the workflow refuses to do
 
 A git tag is a *claim* that the code at that commit is version X.Y.Z, and
-pushing one checks nothing. PyPI will never let a version number be reused —
-not after a yank, not after a delete — so a wrong upload is permanent. Most of
-the workflow is therefore about earning the right to upload:
+pushing one checks nothing. So:
 
 - **The tag must parse** as `vMAJOR.MINOR.PATCH`, optionally `aN`/`bN`/`rcN`.
-  Anything else stops in about ten seconds.
 - **The tag must agree with `__version__`.** The failure this exists for is
   tagging `v0.3.0` while the package still says `0.2.0`. If the version happens
   to be one PyPI has never seen — say `0.2.1` — it would otherwise publish
@@ -109,39 +174,151 @@ the workflow is therefore about earning the right to upload:
   release up is easy to do and invisible afterwards.
 - **The full CI matrix must pass on the tagged commit**, not merely on main at
   some earlier point. `ci.yml` is called as a reusable workflow so it is the
-  same nine jobs, against the tree actually being packaged.
-- **The artifacts must carry the tagged version** in their filenames, must pass
-  `twine check --strict`, and the wheel must install into a clean virtualenv
-  and report `sift X.Y.Z`. The test matrix runs against the source tree; only
-  this runs against the thing users receive.
+  same ten jobs, against the tree actually being packaged.
+- **The artifacts must carry the tagged version** in their filenames, must be
+  exactly two, must pass `twine check --strict`, and the wheel must install into
+  a clean virtualenv and report `sift X.Y.Z`. The test matrix runs against the
+  source tree; only this runs against the thing users receive.
 - **The artifacts must contain no `.npz`, no manifest and no `.env`.** sift's
   index holds the verbatim text of the user's documents, so one reaching PyPI
   would publish someone's bank statements. Nothing builds an index into the
   package and `.gitignore` covers them, but this is the one path where a
   mistake cannot be taken back. (`.env.example` is documentation and ships
-  deliberately — the check is anchored so it does not catch it.)
+  deliberately — the check is anchored so it does not catch it. An earlier
+  unanchored version of this check would have failed every release.)
 
-The GitHub release is created **after** PyPI accepts, so a release never
-announces a version that failed to upload.
+---
+
+## Prereleases
+
+Tags of the form `v0.3.0rc1`, `v0.3.0b2`, `v0.3.0a1` are supported and take the
+same path. Two things differ:
+
+- The GitHub release is marked **pre-release**, so it is not offered as the
+  current version.
+- `pip install sift-downloads` **ignores it**. Only `pip install --pre` or an
+  exact pin picks it up. PyPI works this out from the version string; nothing
+  in the workflow tells it.
+
+`CHANGELOG.md` still needs a matching `## 0.3.0rc1` section — the guard does not
+special-case prereleases.
+
+Note that a prerelease still permanently spends that version string. Use one
+when you genuinely want early feedback, not as a way to test the workflow — see
+[what this does not check](#what-this-does-not-check).
+
+---
 
 ## If something goes wrong
 
-**A guard failed.** Fix it on `main`, delete and re-push the tag:
+### A guard failed (preflight, CI, or build)
+
+Nothing was published. Fix it on `main`, then move the tag:
 
 ```bash
 git tag -d vX.Y.Z && git push --delete origin vX.Y.Z
+# ...fix, merge to main...
 git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-This is safe precisely because nothing was published — the guards run before
-the upload. Once a version is on PyPI, moving its tag is not an option; ship
-the correction as the next version. That is why `0.1.0` was never published and
-the corrected code went out as `0.1.1`.
+This is safe **only** because the guards run before the upload. Once a version
+is on PyPI, moving its tag is not an option: ship the correction as the next
+version. That is why `0.1.0` was never published and the corrected code went
+out as `0.1.1`.
 
-**The upload failed but the guards passed.** Re-running the failed jobs is
-safe: PyPI rejects a duplicate file rather than overwriting one, so a partial
-upload cannot be silently completed with different bytes.
+### The upload failed partway
 
-**`Trusted publishing exchange failure`.** The publisher registration on PyPI
-does not match. Check the owner, repository, workflow *filename* (`release.yml`,
-not the workflow's `name:`) and the environment name against the table above.
+The one genuinely irreversible failure. `twine` uploads the wheel and the sdist
+in one call; if one lands and the other does not, **the one that landed cannot
+be replaced.**
+
+Do not try to complete it by hand. Check what PyPI actually has:
+
+```bash
+pip index versions sift-downloads
+```
+
+If the version is present but incomplete, bump to the next patch and release
+that. Deleting the file on PyPI does not free the filename for re-upload.
+
+### The upload failed cleanly (nothing uploaded)
+
+Re-running the failed job is safe — PyPI rejects a duplicate file rather than
+overwriting one, so a retry cannot silently publish different bytes under the
+same name.
+
+### `Trusted publishing exchange failure`
+
+The publisher registration on PyPI does not match. Run
+[the verify job](#checking-the-setup-without-publishing) and compare its printed
+claims against the setup table — the usual cause is the workflow *filename* or
+the environment name.
+
+### The GitHub release is missing or wrong
+
+Harmless and fully recoverable: PyPI already has the version. Re-run the
+`github-release` job, or create it by hand with `gh release create`.
+
+### Yanking
+
+Yanking on PyPI hides a version from new resolutions but does **not** free the
+version number and does not remove the files. It is the right tool for "this
+release is broken, don't install it", never for "I want to re-upload".
+
+---
+
+## Changing the release workflow
+
+Three changes look harmless and are not. Each breaks releases silently — the
+workflow keeps passing until the moment it has to publish.
+
+1. **Renaming `release.yml`, or moving the publish job to another workflow
+   file.** PyPI matches the *filename* out of the token claims. Rename it and
+   every release fails at the exchange until the publisher is re-registered.
+   Same for renaming the `pypi` environment.
+2. **Removing `workflow_call` from `ci.yml`'s triggers.** `release.yml` calls
+   it as a reusable workflow. Drop the trigger and the release's `CI` job fails
+   to resolve.
+3. **Renaming the default branch.** The ancestry guard hardcodes `origin/main`.
+
+After any change to `release.yml`, run
+[the verify job](#checking-the-setup-without-publishing) — it is free and it
+catches #1 immediately.
+
+Lint before pushing:
+
+```bash
+actionlint .github/workflows/*.yml
+```
+
+`actionlint` **silently skips** the shell and Python inside `run:` blocks unless
+`shellcheck` and `pyflakes` are on `PATH`. A clean run without them means much
+less than it looks like. Install both first.
+
+Also: pass workflow context through `env:`, never interpolated into `run:` —
+`${{ }}` is pasted in before the shell sees it. `GITHUB_REF_NAME` is already
+available as an environment variable.
+
+---
+
+## What this does not check
+
+Being honest about the edges:
+
+- **Answer quality.** `evals/` needs a model server and is not in CI or in the
+  release path. Run it yourself before tagging.
+- **That the changelog is accurate** — only that a section exists.
+- **Anything about the tag's signature or authorship**, beyond it being an
+  ancestor of `main`.
+- **The build and upload steps have not yet run for real.** As of 0.2.0 the
+  credential handshake is verified and the tag trigger and preflight guards are
+  verified (by a throwaway `v0.0.0` tag), but the reusable `CI` call, the build
+  job, the upload and `gh release create` have never executed. The first real
+  release will exercise them. Watch the `CI` job first — a reusable-workflow
+  call that fails to resolve stops everything, and it is the piece with no prior
+  runtime evidence at all.
+
+That last point is deliberate. A test release would have proven the cheap-to-fix
+steps while leaving the one irreversible risk — a partial upload — untested
+anyway, in exchange for permanently spending a version number. Waiting was the
+cheaper option because every guard fails *before* the upload.
