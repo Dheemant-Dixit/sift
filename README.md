@@ -96,6 +96,7 @@ Or run single commands without the session:
 | `sift ask "what's my policy number?"` | one grounded answer with sources |
 | `sift index` | update the index (usually under a second) |
 | `sift index --rebuild` | start over; needed after changing models |
+| | (an upgrade that changes the index format re-embeds itself on the next `sift index`) |
 | `sift unlock` | read your password-protected PDFs (asks for each password) |
 | `sift status` | what's indexed, and what was skipped and why |
 | `sift search "query"` | raw passage scores, for tuning |
@@ -194,6 +195,8 @@ variable, which beats `.env`, which beats the default.
 | Embedding model | `--embed-model` | `SIFT_EMBED_MODEL` | `ollama/nomic-embed-text` |
 | Answering model | `--chat-model` | `SIFT_CHAT_MODEL` | `ollama_chat/llama3.1:8b` |
 | Chunk size / overlap | `--chunk-size` / `--chunk-overlap` | `SIFT_CHUNK_SIZE` / `SIFT_CHUNK_OVERLAP` | 1000 / 150 |
+| Indexed unit, max / min | — | `SIFT_CHILD_SIZE` / `SIFT_CHILD_MIN` | 300 / 200 |
+| Document opening kept per passage | — | `SIFT_DOC_HEAD_CHARS` | 120 |
 | Passages per answer | `--top-k` | `SIFT_TOP_K` | 5 |
 | Relevance bar for `ask` | `--min-score` | `SIFT_MIN_SCORE` | 0.55 |
 | Candidate bar for `find` | — | `SIFT_FIND_MIN_SCORE` | 0.40 |
@@ -231,13 +234,21 @@ never writes to your system.
   They stay findable by filename. (A *locked* PDF is a different problem with a
   real fix — see `sift unlock` above.)
 - **No re-ranker.** Ranking is by topic similarity, not by "does this answer the
-  question". Ask "what is my designation?" and a dozen employment documents can
-  outrank the payslip that says it outright.
+  question", so a document merely *about* your query can outrank the one that
+  answers it. A cross-encoder was built and measured against the worst case in
+  this folder; it did not reliably fix it, and the fix turned out to belong at
+  ingestion instead. It isn't shipped.
 - **Top level only.** sift doesn't walk into subfolders, on purpose — one
   unzipped project would drag in thousands of files.
 - **Answers aren't guaranteed correct.** A small local model can still drift past
   its instructions. The one hard rule is that if nothing relevant is found, sift
   refuses without calling the model at all.
+- **Grounded is not the same as correct.** The failure worth knowing about isn't
+  invention — it's *attribution*. If your documents contain two people's job
+  titles, or two people's account numbers, a model can hand you one person's
+  real, correctly cited value as the other's. Nothing is fabricated, so a
+  "check it against the sources" pass sees nothing wrong. Chunking is set up to
+  make this less likely (above), not to make it impossible.
 
 The [design notes](docs/DESIGN.md#limitations) go into why, and what would fix
 each one.
@@ -249,6 +260,31 @@ each one.
 A RAG pipeline built from scratch — no LangChain, no vector database. Text is
 split into overlapping chunks, each chunk becomes a vector, and search is one dot
 product against a matrix of unit vectors.
+
+**The text sift matches is not the text it reads to you.** One window can't do
+both jobs: matching wants it small, so the embedding is *about* one thing;
+answering wants it large, so the model can see enough to be right. So each
+passage is indexed as a small unit (≈300 characters, cut on line boundaries) and
+served as the ~1000-character window around it. A question matches something
+precise; the model reads the whole passage it came from.
+
+Two limits on that, both of which exist because of measured failures rather than
+taste:
+
+- **An indexed unit has a floor** (`SIFT_CHILD_MIN`, 200). Cut smaller and a
+  passage stops being about anything: a payslip row reading only
+  `Bank A/C No 12345…` embeds as *an account number*, so a question about
+  somebody else's bank account retrieves your payslip. At 200 the same text
+  embeds as *a payslip*, and stops matching.
+- **Each passage carries its document's opening line** (`SIFT_DOC_HEAD_CHARS`,
+  120). Documents name their owner once, at the top, and never again — so a
+  clause lifted from page 4 of a form cannot be attributed to anyone. Given a
+  tax form containing both the employee's job title and the HR signatory's,
+  every model tested answered "what is my designation?" with the *signatory's*
+  title. With the opening line attached, they answer correctly.
+
+Both numbers were measured on one folder of real documents. Like `--min-score`,
+they are starting points, not constants.
 
 **→ [Design notes](docs/DESIGN.md)** — the pipeline, which file to read first,
 why the vector store is shaped the way it is, how to calibrate the relevance

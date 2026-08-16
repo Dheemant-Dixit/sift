@@ -32,7 +32,8 @@ import numpy as np
 from sift_downloads.chunk import chunk_one
 from sift_downloads.config import Settings, get_settings
 from sift_downloads.ingest import REASON_LOCKED, file_fingerprint, load_document, scan_source
-from sift_downloads.store import IndexedChunk, VectorStore, normalize
+from sift_downloads.store import (IndexedChunk, IndexFormatMismatch, VectorStore,
+                                  normalize)
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +112,24 @@ class Manifest:
                       if entry.get("reason") == REASON_LOCKED)
 
 
+def _records(pieces: list[dict], embed: Embedder) -> list[IndexedChunk]:
+    """Embed chunk dicts and turn them into IndexedChunks.
+
+    The one line that matters: `index_text` is what gets embedded, `text` is
+    what gets served. Both paths into the store go through here so they cannot
+    disagree about which of the two the vector describes — the same reason the
+    store keeps a chunk and its vector in one object.
+    """
+    vectors = normalize(embed([c["index_text"] for c in pieces]))
+    return [
+        IndexedChunk(path=c["path"], filename=c["filename"],
+                     chunk_index=c["chunk_index"], text=c["text"],
+                     index_text=c["index_text"], doc_head=c.get("doc_head", ""),
+                     vector=vector)
+        for c, vector in zip(pieces, vectors)
+    ]
+
+
 def _changed(fingerprint: dict, entry: dict | None) -> bool:
     """True if a file's fingerprint differs from what the manifest recorded."""
     if entry is None:
@@ -136,6 +155,13 @@ class SyncStats:
     deferred: int = 0        # files too freshly written to read yet
     seconds: float = 0.0
 
+    # Set when this sync had to re-embed everything because the on-disk format
+    # changed under it. `needs_unlock` is the honest part: a rebuild cannot
+    # recover text that only existed because someone typed a password, so the
+    # files that quietly went back to being locked are named rather than lost.
+    upgraded: bool = False
+    needs_unlock: list[str] = field(default_factory=list)
+
     @property
     def changed(self) -> bool:
         return bool(self.added or self.modified or self.deleted)
@@ -154,7 +180,27 @@ def update_index(settings: Settings | None = None,
     t0 = time.time()
 
     scan = scan_source(settings)
-    store = VectorStore.load(settings=settings)
+
+    # An upgrade can change what a vector DESCRIBES — small-to-big moved
+    # embedding from the served window to a smaller unit inside it. Old vectors
+    # are not corrupt, they answer a different question, so they cannot be
+    # migrated and have to be recomputed. Doing that here means the upgrade is
+    # just the next sync being slower once, rather than an error the user has to
+    # decode and a command they have to remember.
+    upgraded = False
+    previously_indexed: set[str] = set()
+    try:
+        store = VectorStore.load(settings=settings)
+    except IndexFormatMismatch as mismatch:
+        log.info("%s", mismatch)
+        log.info("Re-embedding everything once to bring the index up to date ...")
+        previously_indexed = {path for path, entry in Manifest.load(settings=settings)
+                              .files.items() if entry.get("num_chunks")}
+        settings.index_path.unlink(missing_ok=True)
+        settings.manifest_path.unlink(missing_ok=True)
+        store = VectorStore()
+        upgraded = True
+
     manifest = Manifest.load(settings=settings)
 
     # A file counts as "known" if it has chunks in the store OR the manifest
@@ -198,12 +244,7 @@ def update_index(settings: Settings | None = None,
 
         if new_pieces:
             log.info("Embedding %d new/changed chunks ...", len(new_pieces))
-            vectors = normalize(embed([c["text"] for c in new_pieces]))
-            store.add([
-                IndexedChunk(path=c["path"], filename=c["filename"],
-                             chunk_index=c["chunk_index"], text=c["text"], vector=vector)
-                for c, vector in zip(new_pieces, vectors)
-            ])
+            store.add(_records(new_pieces, embed))
         stats.chunks_added = len(new_pieces)
         store.save(settings=settings)
 
@@ -217,6 +258,16 @@ def update_index(settings: Settings | None = None,
 
     stats.chunks_total = len(store)
     stats.files_total = len(manifest.files)
+    stats.upgraded = upgraded
+    if upgraded:
+        # Files that had text before and are locked again now were unlocked with
+        # a password we deliberately never kept. Naming them is the difference
+        # between an upgrade that costs a minute and one that silently shrinks
+        # what `ask` can see.
+        stats.needs_unlock = sorted(
+            path for path in previously_indexed
+            if manifest.files.get(path, {}).get("reason") == REASON_LOCKED
+        )
     stats.seconds = round(time.time() - t0, 2)
     return stats
 
@@ -249,12 +300,7 @@ def unlock_file(path: str, password: str, settings: Settings | None = None,
 
     store.remove_paths({path})  # idempotent: unlocking twice can't duplicate
     if pieces:
-        vectors = normalize(embed([c["text"] for c in pieces]))
-        store.add([
-            IndexedChunk(path=c["path"], filename=c["filename"],
-                         chunk_index=c["chunk_index"], text=c["text"], vector=vector)
-            for c, vector in zip(pieces, vectors)
-        ])
+        store.add(_records(pieces, embed))
     store.save(settings=settings)
 
     manifest.files[str(path)] = {**manifest.files.get(str(path), {}),

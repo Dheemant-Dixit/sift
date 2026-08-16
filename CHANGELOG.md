@@ -2,6 +2,52 @@
 
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org).
 
+## 0.2.0 — 2026-08-16
+
+**Answers about the right person.**
+
+Given a tax form containing both your job title and the HR signatory's, sift used
+to answer "what is my designation?" with the *signatory's* title — every time, on
+every model tested. Nothing was invented and the citation was correct; it was the
+wrong party's real value. Asked for a landlord's bank account number, it could
+reach for a payslip and offer yours.
+
+Both were chunking problems, and both are fixed at the point where documents are
+split rather than by ranking or prompting.
+
+- **The text sift matches is no longer the text it reads to you.** Passages are
+  indexed as small units (~300 characters, cut on line boundaries) and served as
+  the ~1000-character window around them. Matching wants small, answering wants
+  large; splitting the two lets each have what it needs.
+- **An indexed unit now has a floor** (`SIFT_CHILD_MIN`, 200). Below it a passage
+  stops being about anything — a payslip row reading only `Bank A/C No …` embeds
+  as *an account number*, which is why a question about someone else's account
+  retrieved it. At 200 it embeds as *a payslip* and stops matching.
+- **Each passage carries its document's opening line** (`SIFT_DOC_HEAD_CHARS`,
+  120), because documents name their owner once, at the top, and never again.
+  This is what fixed the designation answer, on both models, with no re-ranker.
+
+Measured across 11 questions and 4 negative controls on both `llama3.1:8b` and
+`llama3.2:3b`: correct answers went 10/11 → **11/11**, confident falsehoods
+**1 → 0**, and clean refusals on the hardest negative 9/16 → **16/16**.
+
+**The index rebuilds itself.** Vectors now describe different text than they did
+in 0.1.x, so an old index cannot be reused — it isn't corrupt, it answers a
+different question, and searching it would give plausible scores for the wrong
+reasons. The next `sift index` (or any `find` / `ask`, which sync first) detects
+this and re-embeds everything once. Expect one slow sync, about a minute for a
+few dozen files.
+
+One thing a rebuild cannot recover: text from PDFs you unlocked with a password,
+because the password was never stored. Those files are named individually when it
+happens, so you can `sift unlock` them again rather than discovering later that
+`ask` stopped seeing them.
+
+**Known limit:** cuts land only on line boundaries, so a document extracted as
+one unbroken line is served whole and gets no benefit from any of this. That
+trade is deliberate — cutting mid-line is what separated a form's value from its
+key in the first place.
+
 ## 0.1.1 — 2026-08-16
 
 First release on PyPI: `pip install sift-downloads`.

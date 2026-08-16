@@ -142,6 +142,8 @@ def cmd_index(args) -> int:
         print(f"Syncing index of {settings.source_dir} ...")
         stats = update_index(settings)
 
+    if stats.upgraded:
+        print("  index format changed in this version — re-embedded everything once")
     if stats.changed:
         print(f"  +{stats.added} added, ~{stats.modified} modified, -{stats.deleted} deleted")
     else:
@@ -154,6 +156,12 @@ def cmd_index(args) -> int:
         print(f"  {stats.skipped} file(s) skipped — see `sift status --skipped`")
     if stats.deferred:
         print(f"  {stats.deferred} file(s) still downloading — run again shortly")
+
+    # Named separately from the general locked count: these are files whose text
+    # sift HAD and just lost, because re-embedding cannot recover what only a
+    # password made readable.
+    for path in stats.needs_unlock:
+        print(f"  ! {Path(path).name} was unlocked before — run `sift unlock` to read it again")
 
     locked = Manifest.load(settings=settings).locked()
     if locked:

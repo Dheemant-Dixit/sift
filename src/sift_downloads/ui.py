@@ -275,6 +275,13 @@ def _do_sync(ui: Ui, quiet: bool = False) -> None:
         ui.error(str(e).split("\n")[0])
         return
     ui.session.synced = True
+    if stats.upgraded:
+        # Announced even in quiet mode: the sync just took a minute instead of a
+        # second, and silence would read as a hang.
+        ui.note("index format changed in this version — re-embedded everything once")
+        for path in stats.needs_unlock:
+            ui.error(f"{Path(path).name} was unlocked before — "
+                     f"run `unlock` to read it again")
     if quiet and not stats.changed:
         return
     if stats.changed:

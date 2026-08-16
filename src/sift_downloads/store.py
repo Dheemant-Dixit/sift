@@ -40,11 +40,19 @@ import numpy as np
 
 from sift_downloads.config import Settings, get_settings
 
-FORMAT_VERSION = 1
+# 2 added the small-to-big split: a record's embedded text and its served text
+# are no longer the same string. A version-1 index has only one, so its vectors
+# describe whole windows while the code now expects them to describe children —
+# scores would be plausible and wrong. It is refused on load instead.
+FORMAT_VERSION = 2
 
 
 class IndexProblem(Exception):
     """Base class for index problems the user can act on."""
+
+
+class IndexFormatMismatch(IndexProblem):
+    """The index was written by a different version of the on-disk format."""
 
 
 class CorruptIndex(IndexProblem):
@@ -65,10 +73,22 @@ class IndexedChunk:
 
     path: str            # source file — for incremental updates and citations
     filename: str        # basename — for citations
-    chunk_index: int     # which chunk within its file
-    text: str            # the chunk's text
-    vector: np.ndarray   # its normalized embedding
+    chunk_index: int     # which record within its file
+    text: str            # what the model is HANDED (the served window)
+    vector: np.ndarray   # the normalized embedding of index_text, not of text
     id: int = -1         # row position, assigned on save; never trusted between edits
+
+    # What was actually EMBEDDED. Empty means it equalled `text`, which is what
+    # plain fixed-window chunking produces. Keeping both on the one record is
+    # the same discipline as keeping the vector here: a chunk, the text it
+    # matched on, and the text it serves are one object, so they cannot drift.
+    index_text: str = ""
+    doc_head: str = ""   # opening of the source document, for attribution
+
+    @property
+    def matched_text(self) -> str:
+        """The string this record's vector was built from."""
+        return self.index_text or self.text
 
 
 def normalize(matrix: np.ndarray) -> np.ndarray:
@@ -165,6 +185,7 @@ class VectorStore:
             results.append({
                 "id": r.id, "path": r.path, "filename": r.filename,
                 "chunk_index": r.chunk_index, "text": r.text,
+                "index_text": r.matched_text, "doc_head": r.doc_head,
                 "score": score, "rank": rank + 1,
             })
         return results
@@ -178,6 +199,9 @@ class VectorStore:
             "embed_dim": self.dim,
             "chunk_size": settings.chunk_size,
             "chunk_overlap": settings.chunk_overlap,
+            "child_size": settings.child_size,
+            "child_min": settings.child_min,
+            "doc_head_chars": settings.doc_head_chars,
         }
 
     def save(self, path: Path | None = None, settings: Settings | None = None) -> None:
@@ -194,8 +218,12 @@ class VectorStore:
             r.id = i  # id is just the row index: recomputed, never stored stale
 
         vectors = self.matrix
+        # index_text is stored only when it differs from text, so plain
+        # fixed-window indexes don't pay to keep every chunk twice.
         meta = [{"id": r.id, "path": r.path, "filename": r.filename,
-                 "chunk_index": r.chunk_index, "text": r.text} for r in self.records]
+                 "chunk_index": r.chunk_index, "text": r.text,
+                 "index_text": "" if r.matched_text == r.text else r.index_text,
+                 "doc_head": r.doc_head} for r in self.records]
         # Should be impossible by construction — a tripwire that turns any
         # future regression into a loud, immediate crash instead of wrong answers.
         assert len(meta) == vectors.shape[0], \
@@ -248,6 +276,21 @@ class VectorStore:
             raise CorruptIndex(
                 f"corrupt index at {path}: {len(meta)} metadata rows vs "
                 f"{vectors.shape[0]} vectors\n  Rebuild it with: sift index --rebuild"
+            )
+
+        # An older index is not corrupt — it is coherent, just built under
+        # different rules. That is precisely why it has to be refused: its
+        # vectors describe whole windows, so every score would look reasonable
+        # and mean something else. Same stance as the embedding-model check.
+        written_with = header.get("format_version", 1) if meta else FORMAT_VERSION
+        if written_with != FORMAT_VERSION:
+            raise IndexFormatMismatch(
+                f"this index is format version {written_with}, but this version of "
+                f"sift writes version {FORMAT_VERSION}.\n"
+                f"  The change was to what gets embedded, so the existing vectors "
+                f"describe different text than searches now assume — the scores "
+                f"would be plausible rather than merely wrong.\n"
+                f"  Run `sift index` to bring it up to date (it re-embeds once)."
             )
 
         if check_model and meta:
