@@ -260,10 +260,17 @@ class VectorStore:
             return cls([])
 
         try:
-            data = np.load(path, allow_pickle=False)
-            vectors = data["vectors"]
-            meta = json.loads(bytes(data["meta"]).decode("utf-8"))
-            header = json.loads(bytes(data["header"]).decode("utf-8")) if "header" in data else {}
+            # Closed explicitly rather than left to the garbage collector: np.load
+            # on an .npz returns a lazy handle that holds the file open, and
+            # Windows refuses to unlink an open file. Loading is followed by
+            # exactly that when an upgrade replaces the index, so a leaked handle
+            # turns "sift rebuilt itself" into PermissionError on one platform.
+            # Every value below is materialised inside the block.
+            with np.load(path, allow_pickle=False) as data:
+                vectors = data["vectors"]
+                meta = json.loads(bytes(data["meta"]).decode("utf-8"))
+                header = (json.loads(bytes(data["header"]).decode("utf-8"))
+                          if "header" in data else {})
         except CorruptIndex:
             raise
         except Exception as e:

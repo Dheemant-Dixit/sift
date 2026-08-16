@@ -242,22 +242,49 @@ def test_an_older_index_is_refused_rather_than_silently_misread():
         vector=np.ones(4, dtype=np.float32))])
     store.save()
 
-    settings = configure()
-    import json
-    data = dict(np.load(settings.index_path, allow_pickle=False))
-    header = json.loads(bytes(data["header"]).decode())
-    header["format_version"] = 1
-    data["header"] = np.frombuffer(json.dumps(header).encode(), dtype=np.uint8)
-    np.savez_compressed(settings.index_path, **data)
+    _downgrade_index_on_disk(configure().index_path)
 
     with pytest.raises(IndexFormatMismatch, match="sift index"):
         VectorStore.load()
 
 
+def test_a_refused_load_does_not_hold_the_index_file_open(make_file, embedder):
+    """The exact production sequence: load fails, then the file is replaced.
+
+    np.load on an .npz returns a lazy handle that keeps the file open. POSIX
+    unlinks an open file happily, so this passes trivially there — on Windows it
+    raises PermissionError, which turned the automatic upgrade into a crash on
+    one platform. Cheap to assert, and the matrix is where it earns its keep.
+    """
+    make_file("doc.txt", PAYSLIP * 40)
+    update_index(embedder=embedder)
+    settings = configure()
+    _downgrade_index_on_disk(settings.index_path)
+
+    with pytest.raises(IndexFormatMismatch):
+        VectorStore.load()
+
+    settings.index_path.unlink()  # PermissionError on Windows if the handle leaked
+
+
+def test_a_successful_load_does_not_hold_the_index_file_open(make_file, embedder):
+    make_file("doc.txt", PAYSLIP * 40)
+    update_index(embedder=embedder)
+    settings = configure()
+
+    VectorStore.load()
+
+    settings.index_path.unlink()
+
+
 def _downgrade_index_on_disk(index_path) -> None:
-    """Rewrite the index's header to claim format version 1."""
+    """Rewrite the index's header to claim format version 1.
+
+    The `with` matters on Windows: an open .npz handle blocks the rewrite.
+    """
     import json
-    data = dict(np.load(index_path, allow_pickle=False))
+    with np.load(index_path, allow_pickle=False) as loaded:
+        data = dict(loaded)
     header = json.loads(bytes(data["header"]).decode())
     header["format_version"] = 1
     data["header"] = np.frombuffer(json.dumps(header).encode(), dtype=np.uint8)
