@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sift-downloads"
-version = "0.1.1"
+version = "0.2.0"
 description = "Ask your Downloads folder where a file is — and what it says. Runs entirely on your machine."
 readme = "README.md"
 requires-python = ">=3.10"

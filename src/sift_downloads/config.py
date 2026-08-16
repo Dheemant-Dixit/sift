@@ -170,9 +170,16 @@ class Settings:
     embed_model: str = "ollama/nomic-embed-text"
     chat_model: str = "ollama_chat/llama3.1:8b"
 
-    # Chunking
-    chunk_size: int = 1000       # target characters per chunk
-    chunk_overlap: int = 150     # characters shared between adjacent chunks
+    # Chunking. `chunk_size` is the window the MODEL is handed; `child_size` is
+    # the smaller window that gets EMBEDDED. See chunk.py for why they differ.
+    chunk_size: int = 1000       # target characters per served window
+    chunk_overlap: int = 150     # characters shared between adjacent windows
+    child_size: int = 300        # max characters per indexed unit; 0 = index whole windows
+    child_min: int = 200         # floor on an indexed unit, so it keeps its subject
+
+    # Characters of each document's opening carried alongside its passages, so a
+    # passage can be attributed to the right party. 0 disables it.
+    doc_head_chars: int = 120
 
     # Retrieval
     top_k: int = 5               # how many chunks `ask` feeds the model
@@ -277,6 +284,9 @@ def _from_env() -> dict:
         "chat_model": _env_str("chat_model"),
         "chunk_size": _env_int("chunk_size"),
         "chunk_overlap": _env_int("chunk_overlap"),
+        "child_size": _env_int("child_size"),
+        "child_min": _env_int("child_min"),
+        "doc_head_chars": _env_int("doc_head_chars"),
         "top_k": _env_int("top_k"),
         "min_score": _env_float("min_score"),
         "find_min_score": _env_float("find_min_score"),
@@ -360,10 +370,23 @@ def _validated(settings: Settings) -> Settings:
         )
     if settings.top_k < 1:
         raise ConfigError(f"top_k must be at least 1, got {settings.top_k}")
+    if settings.child_size < 0 or settings.child_min < 0:
+        raise ConfigError(
+            f"child_size ({settings.child_size}) and child_min ({settings.child_min}) "
+            f"cannot be negative."
+        )
+
+    # The indexed unit is cut FROM the served window, so it can never be larger
+    # than one. Clamping rather than rejecting keeps `--chunk-size 200` from
+    # erroring about a knob the user never touched: the relationship is
+    # structural, so it should hold by construction.
+    child_size = min(settings.child_size, settings.chunk_size)
     return replace(
         settings,
         source_dir=settings.source_dir.expanduser(),
         data_dir=settings.data_dir.expanduser(),
+        child_size=child_size,
+        child_min=min(settings.child_min, child_size) if child_size else settings.child_min,
     )
 
 

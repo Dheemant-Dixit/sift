@@ -64,8 +64,24 @@ def build_context_block(chunks: list[dict]) -> str:
 
     Each passage is tagged with its filename so the model has something concrete
     to cite — an untagged wall of text can only produce untraceable claims.
+
+    It is also tagged with the opening of its document, and that tag is load
+    bearing. A passage lifted from the middle of a form does not say whose form
+    it is, so a question like "what is my designation?" cannot be answered
+    correctly from it — the document names its owner at the top and never again.
+    Given a Form 16 containing both the employee's title and the HR signatory's,
+    both models answered with the signatory's every single time; with the opening
+    line attached, both answered correctly every time. Filenames alone did not
+    help, because a filename is often an account number.
     """
-    return "\n\n---\n\n".join(f"[Source: {c['filename']}]\n{c['text']}" for c in chunks)
+    parts = []
+    for chunk in chunks:
+        head = chunk.get("doc_head") or ""
+        label = f"[Source: {chunk['filename']}"
+        if head:
+            label += f' | Document begins: "{head}..."'
+        parts.append(f"{label}]\n{chunk['text']}")
+    return "\n\n---\n\n".join(parts)
 
 
 def prepare(question: str, top_k: int | None = None, min_score: float | None = None,

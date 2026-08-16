@@ -308,6 +308,43 @@ def test_index_says_nothing_about_passwords_when_nothing_is_locked(monkeypatch, 
     assert "password" not in capsys.readouterr().out
 
 
+def test_index_explains_why_a_sync_took_a_minute(monkeypatch, capsys):
+    """An upgrade re-embeds everything. Unexplained, that reads as a hang."""
+    import sift_downloads.index as index
+    monkeypatch.setattr(index, "update_index",
+                        lambda *a, **k: SyncStats(added=3, upgraded=True))
+
+    main(["index"])
+
+    assert "index format changed" in capsys.readouterr().out
+
+
+def test_an_ordinary_sync_does_not_mention_the_format(monkeypatch, capsys):
+    import sift_downloads.index as index
+    monkeypatch.setattr(index, "update_index", lambda *a, **k: SyncStats(added=1))
+
+    main(["index"])
+
+    assert "index format changed" not in capsys.readouterr().out
+
+
+def test_index_names_files_whose_text_an_upgrade_could_not_keep(monkeypatch, capsys):
+    """Re-embedding cannot recover text that only a password made readable.
+
+    Losing it quietly would shrink what `ask` can see with nothing on screen to
+    explain it, so each file is named rather than folded into a count.
+    """
+    import sift_downloads.index as index
+    monkeypatch.setattr(index, "update_index", lambda *a, **k: SyncStats(
+        added=3, upgraded=True, needs_unlock=["/src/statement.pdf"]))
+
+    main(["index"])
+
+    out = capsys.readouterr().out
+    assert "statement.pdf was unlocked before" in out
+    assert "sift unlock" in out
+
+
 @pytest.mark.parametrize("field, phrase", [
     ("duplicates", "duplicate file"),
     ("skipped", "skipped"),

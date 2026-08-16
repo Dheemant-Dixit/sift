@@ -294,6 +294,31 @@ def test_a_quiet_sync_with_no_changes_prints_nothing(screen, monkeypatch):
     assert screen.read().strip() == ""
 
 
+def test_a_quiet_sync_still_announces_an_upgrade(screen, monkeypatch):
+    """Quiet mode exists to protect the banner, not to hide a minute of work.
+
+    The startup sync is normally silent, but an upgrade re-embeds everything —
+    so staying quiet through it would look exactly like a hang.
+    """
+    import sift_downloads.index as index
+    monkeypatch.setattr(index, "update_index",
+                        lambda s: SyncStats(chunks_total=30, upgraded=True))
+
+    ui_module._do_sync(screen, quiet=True)
+
+    assert "index format changed" in screen.read()
+
+
+def test_an_upgrade_names_files_it_could_not_keep(screen, monkeypatch):
+    import sift_downloads.index as index
+    monkeypatch.setattr(index, "update_index", lambda s: SyncStats(
+        chunks_total=30, upgraded=True, needs_unlock=["/src/statement.pdf"]))
+
+    ui_module._do_sync(screen, quiet=True)
+
+    assert "statement.pdf was unlocked before" in screen.read()
+
+
 def test_a_broken_sync_reports_one_line_not_a_traceback(screen, monkeypatch):
     import sift_downloads.index as index
     from sift_downloads.config import ConfigError
