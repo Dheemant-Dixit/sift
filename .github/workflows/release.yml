@@ -16,12 +16,20 @@ name: Release
 #   pypi       trusted publishing: no API token exists to leak
 #   release    only after PyPI accepted, so a release never points at nothing
 #
+# Running this workflow by hand does NOT release. It runs verify-publisher at
+# the bottom, which checks the trusted publisher registration without building
+# or uploading anything — the one thing you cannot verify by reading this file,
+# because it lives on pypi.org.
+#
 # ONE-TIME SETUP — see docs/RELEASING.md. This workflow cannot publish until a
 # trusted publisher for it is registered on pypi.org.
 
 on:
   push:
     tags: ["v*"]
+  # Does NOT release. Running this by hand only checks the trusted publisher —
+  # see the verify-publisher job at the bottom. Releasing is a tag, always.
+  workflow_dispatch:
 
 # Granted per job instead, so the ordinary jobs cannot touch anything.
 permissions: {}
@@ -33,6 +41,7 @@ concurrency:
 jobs:
   preflight:
     name: Preflight
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -273,3 +282,69 @@ jobs:
             --notes-file release-notes.md \
             "${flags[@]}" \
             dist/*
+
+  # A dry run of the credential half of a release. It mints the same OIDC token
+  # the publish job would, exchanges it with PyPI, and throws the result away.
+  # Nothing is checked out, built or uploaded, so it is safe to run at any time.
+  #
+  # It exists because the trusted publisher registration is the one part of the
+  # release path that lives outside this repository. Reading this file cannot
+  # tell you whether pypi.org agrees with it, and the alternative way to find
+  # out is to push a tag — which publishes a version number that can never be
+  # reused if it turns out to be wrong.
+  #
+  # This has to live in release.yml, in the pypi environment, and not in a
+  # workflow of its own: PyPI matches the workflow *filename* and environment
+  # name out of the token's claims, so a check run from anywhere else would
+  # pass while the real publish still failed.
+  verify-publisher:
+    name: Verify trusted publishing (no upload)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Mint an OIDC token and exchange it with PyPI
+        run: |
+          set -euo pipefail
+
+          # GitHub issues the identity assertion. The audience must be "pypi";
+          # a token minted for anything else is refused by the exchange.
+          oidc=$(curl -sS --fail-with-body \
+                   -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                   "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=pypi" | jq -r '.value')
+          if [ -z "$oidc" ] || [ "$oidc" = "null" ]; then
+            echo "::error::GitHub did not issue an OIDC token"
+            exit 1
+          fi
+          echo "::add-mask::$oidc"
+
+          # These are the claims PyPI matches the registration against, so
+          # printing them turns "refused" into a diagnosis. The token itself is
+          # masked above and never printed.
+          echo "claims GitHub is asserting:"
+          python3 - "$oidc" <<'PY'
+          import base64, json, sys
+          payload = sys.argv[1].split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(payload))
+          keep = ("repository", "workflow_ref", "job_workflow_ref", "environment", "sub", "aud")
+          print(json.dumps({k: claims.get(k) for k in keep}, indent=2))
+          PY
+
+          response=$(curl -sS -X POST https://pypi.org/_/oidc/mint-token \
+                       -H 'Content-Type: application/json' \
+                       -d "$(jq -nc --arg t "$oidc" '{token: $t}')")
+
+          # Never print the response. On success it contains a live upload token
+          # scoped to this project — the exact credential this design exists to
+          # avoid ever having in a log.
+          if printf '%s' "$response" | jq -e '.success == true' >/dev/null 2>&1; then
+            echo "::notice::trusted publisher OK — PyPI issued an upload token, which was discarded"
+          else
+            echo "::error::PyPI refused the exchange — the registration does not match the claims above"
+            printf '%s' "$response" | jq '{message, errors}' 2>/dev/null || true
+            exit 1
+          fi

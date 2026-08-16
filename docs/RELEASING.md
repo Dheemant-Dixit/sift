@@ -39,6 +39,36 @@ yourself as a required reviewer. Everything up to the upload then runs
 unattended, and the irreversible step waits for a click. The workflow already
 has the environment declared, so this needs no code change.
 
+## Checking the setup without publishing
+
+```bash
+gh workflow run Release
+gh run watch "$(gh run list --workflow=Release --limit 1 --json databaseId --jq '.[0].databaseId')"
+```
+
+Running the Release workflow by hand does **not** release. It runs only
+`verify-publisher`, which mints the same OIDC token the publish job would,
+exchanges it with PyPI, and throws the result away. Nothing is checked out,
+built or uploaded, so it is safe to run whenever you want to know whether the
+registration is still good.
+
+This is worth having because the registration is the one part of the release
+path that lives outside this repository — reading `release.yml` cannot tell you
+whether pypi.org agrees with it, and the alternative way to find out is to push
+a tag and spend a version number on the answer.
+
+On failure the job prints the claims GitHub asserted (`repository`,
+`workflow_ref`, `environment`, `sub`) next to PyPI's refusal, which turns
+"it doesn't work" into a diagnosis: compare them against the table above. On
+success it prints nothing but a confirmation — the exchange really does return
+a working upload token, and putting that in a log is the exact thing this whole
+design exists to avoid.
+
+The check has to live in `release.yml` and in the `pypi` environment rather
+than in a workflow of its own. PyPI matches the workflow *filename* and the
+environment name out of the token's claims, so a check running from anywhere
+else would pass while the real publish still failed.
+
 ## Releasing
 
 1. Bump `__version__` in `src/sift_downloads/__init__.py`. That is the only
