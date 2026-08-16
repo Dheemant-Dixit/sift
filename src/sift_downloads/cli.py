@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from sift_downloads import __version__
@@ -30,6 +30,12 @@ def human_size(num_bytes: int) -> str:
 
 def human_age(timestamp: float) -> str:
     delta = datetime.now() - datetime.fromtimestamp(timestamp)
+    # A file can legitimately carry a future mtime — clock skew, a synced
+    # folder, an archive unpacked with bad timestamps — and on Windows
+    # datetime.now() can read a hair behind time.time(). Either way the
+    # arithmetic below would print "-1d ago", so treat the future as now.
+    if delta.total_seconds() < 0:
+        delta = timedelta(0)
     days = delta.days
     if days == 0:
         hours = delta.seconds // 3600

@@ -36,23 +36,30 @@ def as_platform(monkeypatch, system):
     monkeypatch.setattr(open_file_module.platform, "system", lambda: system)
 
 
+# open_file passes str(path) to the OS, and str(Path("/src/a.pdf")) is
+# "\\src\\a.pdf" on Windows. Build expectations the same way the code does,
+# so these assert the ARGUMENT SHAPE rather than the host's separator.
+A_PDF = Path("/src/a.pdf")
+A_SUB = Path("/src/sub/a.pdf")
+
+
 # --- opening a file ---------------------------------------------------------
 
 def test_macos_opens_with_open(monkeypatch, ran):
     as_platform(monkeypatch, "Darwin")
-    open_file(Path("/src/a.pdf"))
-    assert ran[0][0] == ["open", "/src/a.pdf"]
+    open_file(A_PDF)
+    assert ran[0][0] == ["open", str(A_PDF)]
 
 
 def test_linux_opens_with_xdg_open(monkeypatch, ran):
     as_platform(monkeypatch, "Linux")
-    open_file(Path("/src/a.pdf"))
-    assert ran[0][0] == ["xdg-open", "/src/a.pdf"]
+    open_file(A_PDF)
+    assert ran[0][0] == ["xdg-open", str(A_PDF)]
 
 
 def test_an_unknown_platform_falls_back_to_xdg_open(monkeypatch, ran):
     as_platform(monkeypatch, "FreeBSD")
-    open_file(Path("/src/a.pdf"))
+    open_file(A_PDF)
     assert ran[0][0][0] == "xdg-open"
 
 
@@ -61,13 +68,13 @@ def test_windows_uses_startfile(monkeypatch):
     started = []
     monkeypatch.setattr(open_file_module.os, "startfile",
                         lambda p: started.append(p), raising=False)
-    open_file(Path("/src/a.pdf"))
-    assert started == ["/src/a.pdf"]
+    open_file(A_PDF)
+    assert started == [str(A_PDF)]
 
 
 def test_a_failed_open_is_not_swallowed(monkeypatch, ran):
     as_platform(monkeypatch, "Darwin")
-    open_file(Path("/src/a.pdf"))
+    open_file(A_PDF)
     assert ran[0][1]["check"] is True
 
 
@@ -75,28 +82,28 @@ def test_a_failed_open_is_not_swallowed(monkeypatch, ran):
 
 def test_macos_reveals_with_dash_r(monkeypatch, ran):
     as_platform(monkeypatch, "Darwin")
-    reveal_file(Path("/src/a.pdf"))
-    assert ran[0][0] == ["open", "-R", "/src/a.pdf"]
+    reveal_file(A_PDF)
+    assert ran[0][0] == ["open", "-R", str(A_PDF)]
 
 
 def test_windows_reveals_with_explorer_select(monkeypatch, ran):
     as_platform(monkeypatch, "Windows")
-    reveal_file(Path("/src/a.pdf"))
-    assert ran[0][0] == ["explorer", "/select,/src/a.pdf"]
+    reveal_file(A_PDF)
+    assert ran[0][0] == ["explorer", f"/select,{A_PDF}"]
 
 
 def test_windows_reveal_does_not_check_the_exit_code(monkeypatch, ran):
     """explorer /select returns 1 even when it works."""
     as_platform(monkeypatch, "Windows")
-    reveal_file(Path("/src/a.pdf"))
+    reveal_file(A_PDF)
     assert ran[0][1]["check"] is False
 
 
 def test_linux_reveal_opens_the_containing_folder(monkeypatch, ran):
     """There is no standard 'select this file' call on Linux."""
     as_platform(monkeypatch, "Linux")
-    reveal_file(Path("/src/sub/a.pdf"))
-    assert ran[0][0] == ["xdg-open", "/src/sub"]
+    reveal_file(A_SUB)
+    assert ran[0][0] == ["xdg-open", str(A_SUB.parent)]
 
 
 # --- which events the watcher cares about ----------------------------------

@@ -64,11 +64,23 @@ def test_sizes_are_rendered_for_humans(num, expected):
 
 
 @pytest.mark.parametrize("seconds_ago, expected", [
-    (0, "just now"), (3600 * 5, "5h ago"), (86400, "yesterday"),
-    (86400 * 5, "5d ago"), (86400 * 60, "2mo ago"), (86400 * 800, "2y ago"),
+    # Offset a minute past each boundary on purpose. Exactly 5h is fragile:
+    # human_age floors, so a sub-millisecond clock difference between
+    # time.time() and datetime.now() renders 4h59m59.999s as "4h ago".
+    (0, "just now"),
+    (3600 * 5 + 60, "5h ago"),
+    (86400 + 3600, "yesterday"),
+    (86400 * 5 + 3600, "5d ago"),
+    (86400 * 60 + 3600, "2mo ago"),
+    (86400 * 800 + 3600, "2y ago"),
 ])
 def test_ages_are_rendered_for_humans(seconds_ago, expected):
     assert human_age(time.time() - seconds_ago) == expected
+
+
+def test_a_file_from_the_future_reads_as_just_now():
+    """Clock skew and synced folders produce future mtimes; '-1d ago' is nonsense."""
+    assert human_age(time.time() + 86400) == "just now"
 
 
 # --- a bare `sift` ---------------------------------------------------------
@@ -358,9 +370,10 @@ def test_purge_refuses_without_confirmation(monkeypatch, capsys):
 
 def test_purge_with_yes_deletes_and_lists_what_went(monkeypatch, capsys):
     import sift_downloads.index as index
-    monkeypatch.setattr(index, "purge_index", lambda *a, **k: [Path("/d/index.npz")])
+    doomed = Path("/d/index.npz")
+    monkeypatch.setattr(index, "purge_index", lambda *a, **k: [doomed])
     assert main(["purge", "--yes"]) == 0
-    assert "deleted /d/index.npz" in capsys.readouterr().out
+    assert f"deleted {doomed}" in capsys.readouterr().out
 
 
 def test_purge_with_nothing_to_delete_says_so(monkeypatch, capsys):
