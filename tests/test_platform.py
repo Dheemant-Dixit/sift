@@ -12,6 +12,7 @@ one re-index — a property that is invisible until it regresses.
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
@@ -322,3 +323,111 @@ def test_watch_refuses_to_start_on_a_missing_folder(monkeypatch, tmp_path):
     configure(source_dir=tmp_path / "gone")
     with pytest.raises(ConfigError):
         watch_module.watch()
+
+
+# --- one sync at a time -----------------------------------------------------
+#
+# _schedule can cancel a PENDING timer, but a timer that has already fired is
+# running _run on its own thread and nothing can call it back. So a sync that
+# outlasts the next debounce window meets its successor head-on. update_index
+# is load-modify-save over one index.npz, so the loser of that race is not
+# "slower" — it is erased: the run that finishes last writes a store built from
+# a snapshot taken before the other run's file existed, and takes that file's
+# manifest entry with it. The file is then unindexed with nothing left to
+# re-arm the watcher, which is the same silent-forever failure the deferred
+# retry exists to prevent.
+
+
+def test_a_second_sync_does_not_start_while_one_is_running(monkeypatch, scheduled):
+    """The race itself: a timer firing mid-sync must not enter update_index."""
+    from sift_downloads.config import get_settings
+    from sift_downloads.index import SyncStats
+
+    syncs = []
+    first_is_running = threading.Event()
+    let_it_finish = threading.Event()
+
+    def slow_sync(settings):
+        syncs.append(1)
+        first_is_running.set()
+        assert let_it_finish.wait(timeout=5), "the first sync was never released"
+        return SyncStats()
+
+    monkeypatch.setattr(watch_module, "update_index", slow_sync)
+    handler = DebouncedReindexHandler(get_settings())
+
+    first = threading.Thread(target=handler._run, daemon=True)
+    first.start()
+    assert first_is_running.wait(timeout=5), "the first sync never started"
+
+    handler._run()      # the next debounce timer, firing mid-sync
+
+    assert syncs == [1], "the second sync ran while the first was still going"
+
+    let_it_finish.set()
+    first.join(timeout=5)
+    assert not first.is_alive(), "the first sync never finished"
+
+
+def test_a_sync_that_arrives_mid_sync_comes_back_instead_of_being_dropped(
+        monkeypatch, scheduled):
+    """Refusing to start is only safe if the work is not thrown away.
+
+    The events that triggered the second run have already fired and will not
+    fire again, so skipping it outright would lose exactly the file that caused
+    it. It re-arms the timer instead — the same answer the module already gives
+    for a file that was still being written.
+    """
+    from sift_downloads.config import get_settings
+    from sift_downloads.index import SyncStats
+
+    first_is_running = threading.Event()
+    let_it_finish = threading.Event()
+
+    def slow_sync(settings):
+        first_is_running.set()
+        assert let_it_finish.wait(timeout=5), "the first sync was never released"
+        return SyncStats()
+
+    monkeypatch.setattr(watch_module, "update_index", slow_sync)
+    handler = DebouncedReindexHandler(get_settings())
+
+    first = threading.Thread(target=handler._run, daemon=True)
+    first.start()
+    assert first_is_running.wait(timeout=5), "the first sync never started"
+
+    handler._run()
+
+    assert scheduled == [watch_module.RETRY_SECONDS]
+
+    let_it_finish.set()
+    first.join(timeout=5)
+    assert not first.is_alive(), "the first sync never finished"
+
+
+def test_a_deferred_retry_is_armed_from_inside_the_sync(monkeypatch):
+    """_run schedules its own retry, so whatever guards _run cannot be _lock.
+
+    threading.Lock is not reentrant: hold _lock across _run and the deferred
+    path — the one case watch mode exists for — deadlocks on _schedule and the
+    watcher stops forever with no error. This does not discriminate against the
+    race above; it is a guard on where the guard may live, and it fails by
+    hanging, which is why it joins with a timeout instead of blocking CI.
+
+    Every other deferred test replaces _schedule via the `scheduled` fixture,
+    so this is the only one that runs the real one.
+    """
+    from sift_downloads.config import get_settings
+    from sift_downloads.index import SyncStats
+
+    monkeypatch.setattr(watch_module, "update_index", lambda s: SyncStats(deferred=1))
+    monkeypatch.setattr(watch_module, "RETRY_SECONDS", 30)   # never allowed to fire
+    handler = DebouncedReindexHandler(get_settings())
+
+    run = threading.Thread(target=handler._run, daemon=True)
+    run.start()
+    run.join(timeout=5)
+
+    assert not run.is_alive(), "_run deadlocked scheduling its own retry"
+    assert handler._timer is not None, "the retry was never armed"
+    handler.cancel()
