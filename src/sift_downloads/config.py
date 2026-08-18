@@ -43,6 +43,13 @@ load_dotenv(override=False)
 
 APP_NAME = "sift"
 
+# What to type after `pip install`. NOT the same string as APP_NAME, and the
+# difference matters: `sift` was already taken on PyPI, so the distribution is
+# `sift-downloads` while the command, the data directory and the import package
+# stay `sift`. Anything telling a user how to install something therefore has to
+# say `sift-downloads` — naming `sift` there points them at a stranger's project.
+DIST_NAME = "sift-downloads"
+
 # File types we know how to extract text from. Everything else in the folder
 # (.dmg, .zip, .jpg, installers...) is skipped during ingestion — though `find`
 # can still locate those files by name, see find.py.

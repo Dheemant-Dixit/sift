@@ -19,6 +19,7 @@ import pytest
 
 from sift_downloads import open_file as open_file_module
 from sift_downloads import watch as watch_module
+from sift_downloads.config import DIST_NAME
 from sift_downloads.open_file import open_file, reveal_file
 from sift_downloads.watch import DebouncedReindexHandler
 
@@ -226,6 +227,14 @@ def test_cancel_is_safe_before_anything_was_scheduled():
 # --- watch() without watchdog installed ------------------------------------
 
 def test_a_missing_watchdog_explains_the_extra_to_install(monkeypatch, make_file):
+    """The hint must name the DISTRIBUTION, which is not what the command is called.
+
+    `sift` is a different, unrelated project on PyPI, so `pip install sift[watch]`
+    installs a stranger's package and still leaves watch mode broken. This asserts
+    the distribution name is present AND that the bare command name is not being
+    offered as one — the previous `assert "watch" in ...` passed either way, which
+    made it decoration rather than a regression test.
+    """
     from sift_downloads.index import SyncStats
     make_file("a.md", "x")
     monkeypatch.setattr(watch_module, "update_index", lambda s: SyncStats())
@@ -233,7 +242,11 @@ def test_a_missing_watchdog_explains_the_extra_to_install(monkeypatch, make_file
 
     with pytest.raises(SystemExit) as e:
         watch_module.watch()
-    assert "watch" in str(e.value)
+
+    message = str(e.value)
+    assert "watchdog" in message                    # says what is missing
+    assert f"{DIST_NAME}[watch]" in message         # says what to install
+    assert "sift[watch]" not in message             # and not the wrong project
 
 
 # --- watch(), the observer loop --------------------------------------------

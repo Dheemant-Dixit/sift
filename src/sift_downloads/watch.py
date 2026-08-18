@@ -25,7 +25,7 @@ import threading
 import time
 from pathlib import Path
 
-from sift_downloads.config import Settings, get_settings, require_source_dir
+from sift_downloads.config import DIST_NAME, Settings, get_settings, require_source_dir
 from sift_downloads.index import update_index
 
 log = logging.getLogger(__name__)
@@ -96,7 +96,7 @@ def watch(settings: Settings | None = None) -> None:
     except ImportError:
         raise SystemExit(
             "watch mode needs the watchdog package:\n"
-            "  pip install 'sift[watch]'"
+            f'  pip install "{DIST_NAME}[watch]"'
         ) from None
 
     log.info("Initial sync of %s ...", source)
