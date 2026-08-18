@@ -15,6 +15,13 @@ query.
 State on disk (in the platform data dir, never the install dir):
   index.npz     — the VectorStore: vectors + metadata + provenance, one atomic file
   manifest.json — per-file fingerprints, duplicates and skip reasons
+
+One rule holds this module together: `retrieve.get_store()` caches the loaded
+store for the whole process, so ANY statement here that writes, replaces or
+removes index.npz must be followed by `invalidate_store_cache()`. Miss one and
+the process keeps answering out of the store it loaded before the write — the
+sync reports the new chunk count while queries still see the old index, which
+looks like sift losing a document rather than like a stale cache.
 """
 from __future__ import annotations
 
@@ -30,7 +37,7 @@ import litellm
 import numpy as np
 
 from sift_downloads.chunk import chunk_one
-from sift_downloads.config import Settings, get_settings
+from sift_downloads.config import Settings, get_settings, invalidate_store_cache
 from sift_downloads.ingest import REASON_LOCKED, file_fingerprint, load_document, scan_source
 from sift_downloads.store import (IndexedChunk, IndexFormatMismatch, VectorStore,
                                   normalize)
@@ -198,6 +205,7 @@ def update_index(settings: Settings | None = None,
                               .files.items() if entry.get("num_chunks")}
         settings.index_path.unlink(missing_ok=True)
         settings.manifest_path.unlink(missing_ok=True)
+        invalidate_store_cache()
         store = VectorStore()
         upgraded = True
 
@@ -247,6 +255,10 @@ def update_index(settings: Settings | None = None,
             store.add(_records(new_pieces, embed))
         stats.chunks_added = len(new_pieces)
         store.save(settings=settings)
+        # Only when something actually changed: a no-op sync runs before every
+        # query, and dropping the cache there would re-decompress the whole
+        # index on each one.
+        invalidate_store_cache()
 
     # The manifest is rewritten even on a no-op sync: duplicates and skip
     # reasons can change without any indexed file changing (a new copy appears,
@@ -302,6 +314,7 @@ def unlock_file(path: str, password: str, settings: Settings | None = None,
     if pieces:
         store.add(_records(pieces, embed))
     store.save(settings=settings)
+    invalidate_store_cache()
 
     manifest.files[str(path)] = {**manifest.files.get(str(path), {}),
                                  **file_fingerprint(Path(path)),
@@ -321,6 +334,10 @@ def rebuild_index(settings: Settings | None = None,
     settings = settings or get_settings()
     settings.index_path.unlink(missing_ok=True)
     settings.manifest_path.unlink(missing_ok=True)
+    # Not redundant with the invalidation inside update_index: on an empty source
+    # folder there is nothing to save, so that one never runs and the cache would
+    # keep serving the store we just deleted.
+    invalidate_store_cache()
     return update_index(settings, embedder)
 
 
@@ -332,4 +349,5 @@ def purge_index(settings: Settings | None = None) -> list[Path]:
         if path.exists():
             path.unlink()
             removed.append(path)
+    invalidate_store_cache()
     return removed

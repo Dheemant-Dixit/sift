@@ -351,21 +351,35 @@ def reset() -> None:
     reset_caches()
 
 
+def invalidate_store_cache() -> None:
+    """Drop the loaded VectorStore, so the next query re-reads it from disk.
+
+    Two different things stale it, which is why this is separate from
+    `reset_caches()`: the settings can change under it (a `--source` flag now
+    points at a different index), or the FILE can change under it (a sync just
+    rewrote the one it was loaded from). The second has nothing to do with
+    settings, so the index layer needs to be able to say "the file moved" without
+    also tearing down the settings singleton.
+
+    Looked up through sys.modules rather than imported: if retrieve was never
+    loaded there is no cache to clear, and importing it here would drag litellm
+    and numpy into commands that don't need them — and index.py, which calls
+    this, cannot import retrieve at all, since retrieve imports index.
+    """
+    retrieve = sys.modules.get("sift_downloads.retrieve")
+    if retrieve is not None:
+        retrieve.get_store.cache_clear()
+
+
 def reset_caches() -> None:
     """Drop every cache derived from settings.
 
     Anything memoized off the old Settings has to go, or a `--source` flag will
     quietly query the previous folder's index. `retrieve.get_store()` is the
     dangerous one.
-
-    Looked up through sys.modules rather than imported: if retrieve was never
-    loaded there is no cache to clear, and importing it here would drag litellm
-    and numpy into commands that don't need them.
     """
     get_settings.cache_clear()
-    retrieve = sys.modules.get("sift_downloads.retrieve")
-    if retrieve is not None:
-        retrieve.get_store.cache_clear()
+    invalidate_store_cache()
 
 
 def _validated(settings: Settings) -> Settings:

@@ -391,3 +391,73 @@ def test_embedding_nothing_makes_no_request(monkeypatch):
     monkeypatch.setattr(litellm, "embedding",
                         lambda **kw: pytest.fail("no texts means no request"))
     assert len(embed_texts([])) == 0
+
+
+# --- the cached store must not outlive the file it was loaded from ---------
+#
+# retrieve.get_store() caches the loaded store for the whole process. Before the
+# index layer invalidated it, `sift ui` would print "+1 added" from /sync and
+# then keep answering out of the pre-sync store until restart — while /status,
+# which loads a fresh VectorStore, simultaneously reported the new count. Every
+# writer of index.npz has to drop that cache.
+
+def _cached_chunks() -> int:
+    """How many chunks the CACHED store has — the number queries actually see."""
+    from sift_downloads.retrieve import get_store
+    return len(get_store())
+
+
+def test_a_sync_that_adds_a_file_drops_the_cached_store(make_file, embedder):
+    make_file("first.md", "the first document")
+    update_index(embedder=embedder)
+    assert _cached_chunks() == 1, "sanity: the first sync should be visible"
+
+    make_file("second.md", "the second document")
+    stats = update_index(embedder=embedder)
+
+    assert stats.chunks_total == 2, "sanity: the sync itself saw both files"
+    assert _cached_chunks() == 2, "queries still see the pre-sync store"
+
+
+def test_a_sync_that_deletes_a_file_drops_the_cached_store(make_file, embedder):
+    kept = make_file("kept.md", "still here")
+    gone = make_file("gone.md", "not for long")
+    update_index(embedder=embedder)
+    assert _cached_chunks() == 2
+
+    gone.unlink()
+    update_index(embedder=embedder)
+
+    assert _cached_chunks() == 1, "a deleted file is still being served"
+    assert kept.exists()
+
+
+def test_purging_the_index_drops_the_cached_store(make_file, embedder):
+    """Purge is the one where a stale cache keeps serving document text the
+    user explicitly asked to delete."""
+    make_file("private.md", "something confidential")
+    update_index(embedder=embedder)
+    assert _cached_chunks() == 1
+
+    purge_index()
+
+    assert _cached_chunks() == 0, "purged text is still queryable from memory"
+
+
+def test_a_no_op_sync_keeps_the_cached_store(make_file, embedder):
+    """The other half of the rule, and the reason this isn't just an
+    unconditional cache_clear().
+
+    A sync runs before EVERY query (`_quiet_sync`), and loading the store means
+    decompressing the whole index. Invalidating on a sync that changed nothing
+    would put that cost on every single command.
+    """
+    from sift_downloads.retrieve import get_store
+    make_file("stable.md", "unchanged")
+    update_index(embedder=embedder)
+    before = get_store()
+
+    stats = update_index(embedder=embedder)
+
+    assert not stats.changed, "sanity: nothing changed on the second sync"
+    assert get_store() is before, "a no-op sync threw away a still-valid store"
