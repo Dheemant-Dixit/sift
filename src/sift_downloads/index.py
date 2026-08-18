@@ -29,9 +29,9 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Callable
 
 import litellm
 import numpy as np
@@ -39,8 +39,7 @@ import numpy as np
 from sift_downloads.chunk import chunk_one
 from sift_downloads.config import Settings, get_settings, invalidate_store_cache
 from sift_downloads.ingest import REASON_LOCKED, file_fingerprint, load_document, scan_source
-from sift_downloads.store import (IndexedChunk, IndexFormatMismatch, VectorStore,
-                                  normalize)
+from sift_downloads.store import IndexedChunk, IndexFormatMismatch, VectorStore, normalize
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +78,7 @@ class Manifest:
     updated_at: float = 0.0
 
     @classmethod
-    def load(cls, path: Path | None = None, settings: Settings | None = None) -> "Manifest":
+    def load(cls, path: Path | None = None, settings: Settings | None = None) -> Manifest:
         settings = settings or get_settings()
         path = path or settings.manifest_path
         if not path.exists():
@@ -133,7 +132,15 @@ def _records(pieces: list[dict], embed: Embedder) -> list[IndexedChunk]:
                      chunk_index=c["chunk_index"], text=c["text"],
                      index_text=c["index_text"], doc_head=c.get("doc_head", ""),
                      vector=vector)
-        for c, vector in zip(pieces, vectors)
+        # strict=True, because the alternative is silent data loss. If the
+        # embedder ever returns fewer vectors than it was given texts — a short
+        # provider response, a batch that failed quietly — a plain zip() stops
+        # at the shorter one and the surplus chunks simply never reach the
+        # store. Nothing downstream can notice: the store gets a consistent
+        # set, the sync reports success, and the documents are just not
+        # searchable. This turns that into a ValueError on the line that caused
+        # it, which is the whole difference between a bug and an outage.
+        for c, vector in zip(pieces, vectors, strict=True)
     ]
 
 

@@ -15,8 +15,13 @@ import numpy as np
 import pytest
 
 from sift_downloads.config import configure, get_settings
-from sift_downloads.store import (CorruptIndex, IndexedChunk, IndexModelMismatch,
-                        VectorStore, normalize)
+from sift_downloads.store import (
+    CorruptIndex,
+    IndexedChunk,
+    IndexModelMismatch,
+    VectorStore,
+    normalize,
+)
 
 
 def _chunk(text: str, path: str, i: int, vec) -> IndexedChunk:
@@ -90,9 +95,8 @@ def test_load_rejects_index_from_a_different_model(tmp_path):
 def test_load_rejects_corrupt_index(tmp_path):
     """A mismatched index must refuse to load rather than serve wrong answers."""
     path = tmp_path / "index.npz"
-    meta = np.frombuffer(
-        json.dumps([{"id": 0, "path": "/x", "filename": "x", "chunk_index": 0, "text": "x"}]).encode(),
-        dtype=np.uint8)
+    row = {"id": 0, "path": "/x", "filename": "x", "chunk_index": 0, "text": "x"}
+    meta = np.frombuffer(json.dumps([row]).encode(), dtype=np.uint8)
     # 2 vectors but only 1 metadata row — deliberately broken
     np.savez_compressed(path, vectors=np.zeros((2, 3), np.float32), meta=meta)
 

@@ -46,7 +46,7 @@ def test_designation_answers_about_the_employee_not_the_signatory(ask):
     See evals/README.md. It catches a gross regression; it does not certify
     that attribution is safe.
     """
-    marker = compile_marker(dict((q, m) for q, _, m in POSITIVES)[DESIGNATION_QUERY])
+    marker = compile_marker({q: m for q, _, m in POSITIVES}[DESIGNATION_QUERY])
     replies = [a.text for a in ask(DESIGNATION_QUERY, runs=3)]
 
     wrong = [r for r in replies if WRONG_ENTITY.search(r)]

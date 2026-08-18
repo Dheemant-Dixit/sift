@@ -18,12 +18,14 @@ import os
 import pytest
 
 from sift_downloads.config import configure, get_settings
-from sift_downloads.index import (Manifest, purge_index, rebuild_index,
-                                  unlock_file, update_index)
-from sift_downloads.ingest import (REASON_LOCKED, REASON_NO_TEXT, content_key,
-                                   is_indexable, scan_source)
+from sift_downloads.index import Manifest, purge_index, rebuild_index, unlock_file, update_index
+from sift_downloads.ingest import (
+    REASON_LOCKED,
+    REASON_NO_TEXT,
+    content_key,
+    scan_source,
+)
 from sift_downloads.store import VectorStore
-
 
 # --- what gets scanned -----------------------------------------------------
 
@@ -338,6 +340,7 @@ def _fake_embedding_response(n_vectors, dim=4):
 
 def test_embed_texts_returns_one_row_per_text(monkeypatch):
     import litellm
+
     from sift_downloads.index import embed_texts
     monkeypatch.setattr(litellm, "embedding",
                         lambda model, input: _fake_embedding_response(len(input)))
@@ -348,6 +351,7 @@ def test_embed_texts_is_float32(monkeypatch):
     """The store asserts on dtype; a float64 matrix doubles the index size."""
     import litellm
     import numpy as np
+
     from sift_downloads.index import embed_texts
     monkeypatch.setattr(litellm, "embedding",
                         lambda model, input: _fake_embedding_response(len(input)))
@@ -357,6 +361,7 @@ def test_embed_texts_is_float32(monkeypatch):
 def test_embed_texts_batches_long_inputs(monkeypatch):
     """One request per 64 chunks, not one per chunk and not one giant request."""
     import litellm
+
     from sift_downloads.index import embed_texts
     sizes = []
 
@@ -371,6 +376,7 @@ def test_embed_texts_batches_long_inputs(monkeypatch):
 
 def test_embed_texts_uses_the_configured_model(monkeypatch):
     import litellm
+
     from sift_downloads.config import configure
     from sift_downloads.index import embed_texts
     seen = {}
@@ -387,10 +393,53 @@ def test_embed_texts_uses_the_configured_model(monkeypatch):
 
 def test_embedding_nothing_makes_no_request(monkeypatch):
     import litellm
+
     from sift_downloads.index import embed_texts
     monkeypatch.setattr(litellm, "embedding",
                         lambda **kw: pytest.fail("no texts means no request"))
     assert len(embed_texts([])) == 0
+
+
+# --- a vector per chunk, or an error ---------------------------------------
+#
+# _records() is the single seam every chunk passes through on its way into the
+# store, and it pairs chunks with vectors positionally. If an embedder ever
+# returns fewer vectors than texts, a plain zip() drops the surplus chunks and
+# says nothing: the store stays internally consistent, the sync reports success,
+# and the documents are simply not searchable afterwards. These pin the loud
+# failure in place of the quiet one.
+
+def _pieces(n: int) -> list[dict]:
+    return [{"path": "/src/a.md", "filename": "a.md", "chunk_index": i,
+             "text": f"chunk {i} served", "index_text": f"chunk {i}"}
+            for i in range(n)]
+
+
+def test_an_embedder_returning_too_few_vectors_raises():
+    """The shape a short provider response takes: N texts in, N-1 vectors out."""
+    from sift_downloads.index import _records
+    from tests.conftest import fake_embed
+
+    with pytest.raises(ValueError):
+        _records(_pieces(3), lambda texts: fake_embed(texts)[:-1])
+
+
+def test_an_embedder_returning_too_many_vectors_raises():
+    """The other direction, so the guard isn't just an off-by-one in one sense."""
+    from sift_downloads.index import _records
+    from tests.conftest import fake_embed
+
+    with pytest.raises(ValueError):
+        _records(_pieces(3), lambda texts: fake_embed([*texts, "extra"]))
+
+
+def test_one_vector_per_chunk_is_not_disturbed():
+    """The guard must only fire on a mismatch — the ordinary path is every sync."""
+    from sift_downloads.index import _records
+    from tests.conftest import fake_embed
+
+    records = [r.index_text for r in _records(_pieces(3), fake_embed)]
+    assert records == ["chunk 0", "chunk 1", "chunk 2"]
 
 
 # --- the cached store must not outlive the file it was loaded from ---------

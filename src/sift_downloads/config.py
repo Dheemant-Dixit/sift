@@ -83,7 +83,10 @@ def _windows_downloads() -> Path | None:
             def __init__(self, uuid_str):
                 super().__init__()
                 u = UUID(uuid_str)
-                self.d1, self.d2, self.d3, rest = u.fields[0], u.fields[1], u.fields[2], u.fields[3:]
+                # u.fields[3:] is the same trailing 8 bytes that the loop below
+                # copies one at a time; it was being unpacked into a name nothing
+                # read. ctypes wants them written into the array, not bound.
+                self.d1, self.d2, self.d3 = u.fields[0], u.fields[1], u.fields[2]
                 for i, b in enumerate(u.bytes[8:]):
                     self.d4[i] = b
 
@@ -424,8 +427,8 @@ def require_source_dir(settings: Settings | None = None) -> Path:
         return source
 
     hint = (
-        f"Point sift somewhere else with:  sift <command> --source /path/to/folder\n"
-        f"  or set it permanently:          export SIFT_SOURCE=/path/to/folder"
+        "Point sift somewhere else with:  sift <command> --source /path/to/folder\n"
+        "  or set it permanently:          export SIFT_SOURCE=/path/to/folder"
     )
     if not source.exists():
         raise ConfigError(f"Source folder does not exist: {source}\n  {hint}")

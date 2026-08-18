@@ -23,9 +23,14 @@ import pytest
 
 from sift_downloads import generate
 from sift_downloads.config import ConfigError, configure
-from sift_downloads.generate import (Answer, AnswerStream, answer,
-                                     build_context_block, build_messages,
-                                     prepare)
+from sift_downloads.generate import (
+    Answer,
+    AnswerStream,
+    answer,
+    build_context_block,
+    build_messages,
+    prepare,
+)
 
 
 def chunk(filename="notes.md", text="some text", score=0.9):
@@ -150,7 +155,7 @@ def test_prepare_filters_out_only_the_chunks_below_the_bar(retrieved):
 def test_prepare_falls_back_to_the_configured_bar(retrieved):
     configure(min_score=0.8)
     retrieved["chunks"] = [chunk(score=0.7)]
-    chunks, refusal = prepare("q")
+    _, refusal = prepare("q")
     assert refusal is not None, "the settings bar should apply when none is passed"
 
 

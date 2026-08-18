@@ -14,6 +14,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
@@ -254,7 +255,7 @@ def test_a_missing_watchdog_explains_the_extra_to_install(monkeypatch, make_file
 class FakeObserver:
     """Stands in for watchdog's Observer, recording how it was driven."""
 
-    instances: list["FakeObserver"] = []
+    instances: ClassVar[list[FakeObserver]] = []
 
     def __init__(self):
         self.scheduled: list[tuple[object, str, bool]] = []

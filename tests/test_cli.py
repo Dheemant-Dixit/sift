@@ -48,8 +48,8 @@ def no_sync(monkeypatch):
 
 
 def a_hit(name="lease.md", **kw):
-    defaults = dict(path=Path(f"/src/{name}"), score=0.9, modified=time.time(),
-                    size=2048, matched_on="content", snippet="60 days notice")
+    defaults = {"path": Path(f"/src/{name}"), "score": 0.9, "modified": time.time(),
+                "size": 2048, "matched_on": "content", "snippet": "60 days notice"}
     return FileHit(**{**defaults, **kw})
 
 

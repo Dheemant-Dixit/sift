@@ -17,7 +17,6 @@ from rich.console import Console
 from sift_downloads.session import HELP, Session, UiCommand, parse
 from sift_downloads.ui import Ui, _clip
 
-
 # --- parsing ---------------------------------------------------------------
 
 def test_bare_text_searches():
@@ -187,7 +186,14 @@ class _FullHit:
 
 def _render(hits, width=72) -> str:
     buffer = io.StringIO()
-    console = Console(file=buffer, width=width, no_color=True, highlight=False)
+    # force_terminal=False, matching test_ui's console. no_color=True suppresses
+    # colour but NOT bold, dim or italic, and rich decides whether to emit those
+    # from FORCE_COLOR in the environment — so with FORCE_COLOR set these tests
+    # measure escape sequences as if they were characters and fail on the width
+    # assertion below. Pinning it here makes the rendering depend on the
+    # arguments rather than on whose shell ran pytest.
+    console = Console(file=buffer, width=width, force_terminal=False,
+                      no_color=True, highlight=False)
     Ui(Session(), console=console).results(hits, "query")
     return buffer.getvalue()
 

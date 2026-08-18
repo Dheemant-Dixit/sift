@@ -12,8 +12,7 @@ from pathlib import Path
 import pytest
 
 from sift_downloads import config
-from sift_downloads.config import (ConfigError, Settings, configure, get_settings,
-                         require_source_dir)
+from sift_downloads.config import ConfigError, Settings, configure, get_settings, require_source_dir
 
 
 def test_defaults_apply_with_nothing_set(monkeypatch):

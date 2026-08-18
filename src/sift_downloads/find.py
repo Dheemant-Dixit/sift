@@ -53,7 +53,8 @@ _STOPWORDS = frozenset({
 
 # Skip reasons that mean "this file is not worth showing you at all", as opposed
 # to "this file exists but its contents couldn't be read".
-_UNLISTABLE_REASONS = frozenset({"hidden file", "download in progress", "still being written", "not a file"})
+_UNLISTABLE_REASONS = frozenset({"hidden file", "download in progress",
+                                 "still being written", "not a file"})
 
 # Splits a filename into words: on separators, and also at camelCase joins and
 # letter/digit boundaries, so "RentalAgreement2024.pdf" -> rental agreement 2024.
@@ -167,7 +168,7 @@ def find_files(query: str, limit: int = 10, recent_first: bool = False,
 
     # Every file the last scan saw is a candidate, including ones whose contents
     # could not be read — those are exactly the files people struggle to find.
-    candidates: dict[str, str] = {path: "" for path in manifest.files}
+    candidates: dict[str, str] = dict.fromkeys(manifest.files, "")
     for path, reason in manifest.skipped.items():
         if reason not in _UNLISTABLE_REASONS:
             candidates[path] = reason
