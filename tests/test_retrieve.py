@@ -18,7 +18,7 @@ import pytest
 
 import sift_downloads
 from sift_downloads import retrieve
-from sift_downloads.config import configure
+from sift_downloads.config import ConfigError, configure
 from sift_downloads.index import update_index
 from sift_downloads.retrieve import embed_query, get_store, search
 
@@ -155,3 +155,13 @@ def test_litellm_is_kept_offline_by_the_package_import():
     """A price-list download on import would make 'nothing leaves your machine' untrue."""
     import os
     assert os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] == "True"
+
+
+def test_the_library_search_path_rejects_a_top_k_below_one(an_index, fake_embedding):
+    """`search` is exported from the package, so it is reachable without the CLI.
+
+    `configure()` never sees `--top-k`, so a settings-level check would leave
+    this path — and `answer()`, which delegates straight to it — unguarded.
+    """
+    with pytest.raises(ConfigError, match="at least 1"):
+        search("notice period", top_k=0)

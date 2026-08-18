@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import functools
 
-from sift_downloads.config import Settings, get_settings
+from sift_downloads.config import Settings, get_settings, validate_top_k
 from sift_downloads.index import embed_texts
 from sift_downloads.store import VectorStore, normalize
 
@@ -39,6 +39,7 @@ def search(query: str, top_k: int | None = None, min_score: float | None = None,
     """Return the top_k chunks most similar to `query`, each with its score."""
     settings = settings or get_settings()
     top_k = settings.top_k if top_k is None else top_k
+    validate_top_k(top_k)
     store = get_store()
     if not len(store):
         return []

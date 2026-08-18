@@ -385,15 +385,37 @@ def reset_caches() -> None:
     invalidate_store_cache()
 
 
+def validate_top_k(top_k: int) -> None:
+    """Reject a top_k that would silently return the wrong number of chunks.
+
+    `np.argsort(scores)[-k:]` reads `[-0:]` as `[0:]` — the entire index rather
+    than none of it — and `[-1:]` as everything but the worst match. Both are
+    wrong answers, not errors, so nothing downstream can notice.
+
+    Called from three places because three different things supply a k, and no
+    one of them sees the others: the settings (`_validated`), the library entry
+    point (`retrieve.search`, which short-circuits on an empty index before the
+    store is ever consulted), and the store. `--top-k` reaches none of them
+    through `configure()` — it is a per-command flag with a different default
+    on each command.
+    """
+    if top_k < 1:
+        raise ConfigError(f"top_k must be at least 1, got {top_k}")
+
+
 def _validated(settings: Settings) -> Settings:
     """Reject configurations that would fail confusingly later on."""
+    if settings.chunk_overlap < 0:
+        raise ConfigError(
+            f"chunk_overlap ({settings.chunk_overlap}) cannot be negative — "
+            f"chunking would advance past each window and never index the gap."
+        )
     if settings.chunk_overlap >= settings.chunk_size:
         raise ConfigError(
             f"chunk_overlap ({settings.chunk_overlap}) must be smaller than "
             f"chunk_size ({settings.chunk_size}), or chunking cannot advance."
         )
-    if settings.top_k < 1:
-        raise ConfigError(f"top_k must be at least 1, got {settings.top_k}")
+    validate_top_k(settings.top_k)
     if settings.child_size < 0 or settings.child_min < 0:
         raise ConfigError(
             f"child_size ({settings.child_size}) and child_min ({settings.child_min}) "
