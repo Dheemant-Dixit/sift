@@ -244,10 +244,17 @@ gate, and removing or renaming one leaves a required check that will never
 report again — which blocks every merge, with no bypass. Change the two
 together, or not at all.
 
+Eleven of the twelve come from `ci.yml`. The twelfth, `pr-template`, has its
+own workflow file on purpose: `release.yml` calls `ci.yml` through
+`workflow_call`, and there is no pull request on the release path for a body
+check to read. It is also the only context whose job id doubles as its context
+name, so renaming the job removes the gate without failing anything.
+
 | Where | Rule | Stops |
 |---|---|---|
 | `main` | pull request required, 0 approvals | pushing straight to the branch releases are cut from |
-| `main` | all 11 CI contexts must pass, branch up to date | merging something the matrix has not seen |
+| `main` | all 12 CI contexts must pass, branch up to date | merging something the matrix has not seen |
+| `main` | `pr-template` must pass | a pull request that never says how it was verified |
 | `main` | squash only, linear history | a merge commit making `--is-ancestor` ambiguous |
 | `main` | no force-push, no deletion | rewriting history under an already-published tag |
 | `refs/tags/v*` | no update, no force-move | a tag that no longer describes what PyPI shipped |
