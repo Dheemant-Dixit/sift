@@ -141,7 +141,10 @@ def test_everything_in_dunder_all_is_reachable():
 
 def test_an_unknown_attribute_raises_attribute_error():
     with pytest.raises(AttributeError):
-        sift_downloads.definitely_not_a_real_name
+        # The bare attribute access IS the assertion — B018's "useless
+        # expression" is the thing under test, so the check is silenced here
+        # rather than for the whole file.
+        sift_downloads.definitely_not_a_real_name  # noqa: B018
 
 
 def test_the_version_is_exported():

@@ -155,7 +155,7 @@ def test_prepare_filters_out_only_the_chunks_below_the_bar(retrieved):
 def test_prepare_falls_back_to_the_configured_bar(retrieved):
     configure(min_score=0.8)
     retrieved["chunks"] = [chunk(score=0.7)]
-    chunks, refusal = prepare("q")
+    _, refusal = prepare("q")
     assert refusal is not None, "the settings bar should apply when none is passed"
 
 

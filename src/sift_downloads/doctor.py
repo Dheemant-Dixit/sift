@@ -67,7 +67,9 @@ def check_models(settings: Settings) -> list[Check]:
     local_models = [m for m in (settings.embed_model, settings.chat_model)
                     if m.startswith(("ollama/", "ollama_chat/"))]
     if not local_models:
-        return [Check("models", OK, f"using non-local models: {settings.embed_model}, {settings.chat_model}")]
+        return [Check("models", OK,
+                      f"using non-local models: "
+                      f"{settings.embed_model}, {settings.chat_model}")]
 
     installed = _installed_ollama_models()
     if installed is None:
@@ -136,7 +138,9 @@ def check_privacy(settings: Settings) -> Check:
         return Check("privacy", OK, "fully local — no document text leaves this machine")
     models = ", ".join(settings.cloud_models())
     if settings.allow_cloud:
-        return Check("privacy", WARN, f"cloud models in use ({models}) — document text is sent to the provider")
+        return Check("privacy", WARN,
+                     f"cloud models in use ({models}) — "
+                     f"document text is sent to the provider")
     return Check("privacy", FAIL, f"cloud models configured ({models}) without consent",
                  "re-run with --allow-cloud if that's intended")
 

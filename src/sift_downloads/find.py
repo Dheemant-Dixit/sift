@@ -53,7 +53,8 @@ _STOPWORDS = frozenset({
 
 # Skip reasons that mean "this file is not worth showing you at all", as opposed
 # to "this file exists but its contents couldn't be read".
-_UNLISTABLE_REASONS = frozenset({"hidden file", "download in progress", "still being written", "not a file"})
+_UNLISTABLE_REASONS = frozenset({"hidden file", "download in progress",
+                                 "still being written", "not a file"})
 
 # Splits a filename into words: on separators, and also at camelCase joins and
 # letter/digit boundaries, so "RentalAgreement2024.pdf" -> rental agreement 2024.

@@ -259,7 +259,9 @@ def cmd_status(args) -> int:
     print(f"source     {settings.source_dir}")
     print(f"index      {settings.data_dir}")
     print(f"models     {settings.embed_model} (embed) · {settings.chat_model} (chat)")
-    print(f"privacy    {'LOCAL — no document text leaves this machine' if not settings.uses_cloud() else 'CLOUD models in use'}")
+    privacy = ("CLOUD models in use" if settings.uses_cloud()
+               else "LOCAL — no document text leaves this machine")
+    print(f"privacy    {privacy}")
 
     if not settings.index_path.exists():
         print("\nNo index yet. Build one with: sift index")

@@ -192,7 +192,8 @@ class Ui:
         self.console.print()
         seen: list[str] = []
         for chunk in chunks:
-            tag = f"{chunk['filename']} [dim](chunk {chunk['chunk_index']}, {chunk['score']:.2f})[/dim]"
+            tag = (f"{chunk['filename']} "
+                   f"[dim](chunk {chunk['chunk_index']}, {chunk['score']:.2f})[/dim]")
             if tag not in seen:
                 seen.append(tag)
         self.console.print("  [dim]— from —[/dim]")

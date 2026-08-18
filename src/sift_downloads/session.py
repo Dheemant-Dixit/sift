@@ -153,8 +153,9 @@ class Session:
         if index is None:
             return None, "which result? e.g. /open 1"
         if not 1 <= index <= len(self.last_hits):
-            return None, (f"no result {index} — there "
-                          f"{'is 1 result' if len(self.last_hits) == 1 else f'are {len(self.last_hits)} results'}")
+            count = len(self.last_hits)
+            have = "is 1 result" if count == 1 else f"are {count} results"
+            return None, f"no result {index} — there {have}"
         return self.last_hits[index - 1].path, ""
 
 
