@@ -145,3 +145,10 @@ def test_cloud_model_is_refused_without_consent():
 def test_cloud_model_allowed_with_explicit_consent():
     settings = configure(chat_model="anthropic/claude-sonnet-4-5", allow_cloud=True)
     config.check_cloud_consent(settings)  # must not raise
+
+
+def test_negative_overlap_is_rejected():
+    """Bounded from above already; unbounded below, `chunk_text` advances past
+    each window and the gap between them is never indexed — no error, no log."""
+    with pytest.raises(ConfigError, match="negative"):
+        configure(chunk_overlap=-100)

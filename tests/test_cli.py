@@ -529,3 +529,16 @@ def test_every_subcommand_is_wired_to_a_function():
 def test_the_program_is_still_called_sift():
     """The distribution is sift-downloads; what the user types is not."""
     assert build_parser().prog == "sift"
+
+
+def test_ask_with_top_k_zero_exits_cleanly_rather_than_traceback(monkeypatch, no_sync, capsys):
+    """The guard lives in store.py, so this also pins that main() renders it.
+
+    `answer` is deliberately NOT stubbed here — the point is the whole wiring
+    from the flag down to the store, which is where the check actually sits.
+    """
+    import sift_downloads.retrieve as retrieve
+    from tests.conftest import fake_embed
+    monkeypatch.setattr(retrieve, "embed_texts", lambda texts, settings=None: fake_embed(texts))
+    assert main(["ask", "--top-k", "0", "what", "is", "my", "notice", "period"]) == 1
+    assert "top_k" in capsys.readouterr().err

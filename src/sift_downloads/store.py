@@ -38,7 +38,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sift_downloads.config import Settings, get_settings
+from sift_downloads.config import Settings, get_settings, validate_top_k
 
 # 2 added the small-to-big split: a record's embedded text and its served text
 # are no longer the same string. A version-1 index has only one, so its vectors
@@ -165,6 +165,7 @@ class VectorStore:
         """
         if k is None:
             k = get_settings().top_k
+        validate_top_k(k)
         if not self.records:
             return []
         if query_vector.shape[0] != self.matrix.shape[1]:

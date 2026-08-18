@@ -14,7 +14,7 @@ import json
 import numpy as np
 import pytest
 
-from sift_downloads.config import configure, get_settings
+from sift_downloads.config import ConfigError, configure, get_settings
 from sift_downloads.store import (
     CorruptIndex,
     IndexedChunk,
@@ -122,3 +122,37 @@ def test_missing_index_loads_empty(tmp_path):
     store = VectorStore.load(tmp_path / "nope.npz")
     assert len(store) == 0
     assert store.search(np.zeros(3, dtype=np.float32)) == []
+
+
+# --- top_k is a boundary, not a suggestion ----------------------------------
+
+def test_a_top_k_below_one_returns_the_whole_index_unless_rejected():
+    """`np.argsort(scores)[-0:]` is `[0:]` — every record, not none of them.
+
+    The settings-level check in `_validated` cannot see this: `--top-k` is a
+    per-command flag that never reaches `configure()`, and `search()` is a
+    documented library entry point in its own right.
+    """
+    store = _sample_store()
+    query = normalize(np.array([[0.0, 0.0, 1.0]], dtype=np.float32))[0]
+    with pytest.raises(ConfigError, match="at least 1"):
+        store.search(query, k=0)
+
+
+def test_a_negative_top_k_is_rejected():
+    """`[-1:]` silently drops every result but the worst-scoring one."""
+    store = _sample_store()
+    query = normalize(np.array([[0.0, 0.0, 1.0]], dtype=np.float32))[0]
+    with pytest.raises(ConfigError, match="at least 1"):
+        store.search(query, k=-1)
+
+
+def test_top_k_is_checked_before_the_empty_index_shortcut():
+    """An invalid argument is invalid whatever happens to be indexed.
+
+    Pins the guard above `if not self.records: return []`. Below it, the same
+    call reports "no matches" on an empty index and raises on a full one.
+    """
+    query = normalize(np.array([[0.0, 0.0, 1.0]], dtype=np.float32))[0]
+    with pytest.raises(ConfigError, match="at least 1"):
+        VectorStore([]).search(query, k=0)
