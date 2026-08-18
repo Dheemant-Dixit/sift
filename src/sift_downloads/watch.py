@@ -5,7 +5,7 @@ Optional — `sift index` on demand is enough for most people, and the CLI runs 
 fast sync before every query anyway. This is for folders busy enough that you'd
 rather the work happened in the background.
 
-Two details that matter in practice:
+Three details that matter in practice:
 
 1. DEBOUNCING. One user action — saving a file, a browser finishing a download,
    unzipping an archive — fires many rapid filesystem events. Re-indexing on
@@ -17,6 +17,13 @@ Two details that matter in practice:
    have already fired, so nothing would ever trigger a retry and the file would
    stay unindexed indefinitely. So when a sync reports deferred files, the
    watcher schedules itself another pass.
+
+3. ONE SYNC AT A TIME. A sync can outlast the next debounce window, and each
+   timer fires on its own thread, so two of them can meet. update_index is
+   load-modify-save over one index.npz: the run that finishes last wins, and
+   what it writes was built before the other run's file existed. That file
+   loses its manifest entry too, so it goes unindexed with nothing left to
+   re-arm the watcher.
 """
 from __future__ import annotations
 
@@ -40,7 +47,8 @@ class DebouncedReindexHandler:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._timer: threading.Timer | None = None
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()       # guards the timer handle only
+        self._syncing = threading.Lock()    # held while update_index runs
 
     # watchdog calls this; typed loosely so watchdog stays an optional import.
     def dispatch(self, event) -> None:
@@ -66,19 +74,34 @@ class DebouncedReindexHandler:
             self._timer.start()
 
     def _run(self) -> None:
-        log.info("Change settled — syncing ...")
-        try:
-            stats = update_index(self.settings)
-        except Exception as e:
-            log.error("  ! sync failed: %s: %s", type(e).__name__, e)
-            return
-        log.info("  %d chunks across %d files (%.1fs)",
-                 stats.chunks_total, stats.files_total, stats.seconds)
-        if stats.deferred:
-            # Files were still being written. Nothing else will wake us for
-            # them, so come back on our own.
-            log.info("  %d file(s) still being written — re-checking shortly", stats.deferred)
+        # Two locks, deliberately. _syncing cannot be _lock: _run schedules its
+        # own retry, _schedule takes _lock, and a threading.Lock is not
+        # reentrant — one lock across both would deadlock the watcher on the
+        # deferred path, silently and forever. And we never WAIT for _syncing.
+        # Blocking here would park a thread per fired timer for the length of a
+        # sync the docstring measures in tens of seconds; re-arming instead
+        # costs one timer, which the next _schedule collapses anyway. Nothing
+        # is dropped: the events that woke us are gone, but the retry is not.
+        if not self._syncing.acquire(blocking=False):
+            log.info("  · still syncing — re-checking shortly")
             self._schedule(RETRY_SECONDS)
+            return
+        try:
+            log.info("Change settled — syncing ...")
+            try:
+                stats = update_index(self.settings)
+            except Exception as e:
+                log.error("  ! sync failed: %s: %s", type(e).__name__, e)
+                return
+            log.info("  %d chunks across %d files (%.1fs)",
+                     stats.chunks_total, stats.files_total, stats.seconds)
+            if stats.deferred:
+                # Files were still being written. Nothing else will wake us for
+                # them, so come back on our own.
+                log.info("  %d file(s) still being written — re-checking shortly", stats.deferred)
+                self._schedule(RETRY_SECONDS)
+        finally:
+            self._syncing.release()
 
     def cancel(self) -> None:
         with self._lock:
