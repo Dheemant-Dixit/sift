@@ -14,17 +14,26 @@ two bugs this code has actually hit in the past:
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
-from sift_downloads.config import configure, get_settings
-from sift_downloads.index import Manifest, purge_index, rebuild_index, unlock_file, update_index
+from sift_downloads.config import ConfigError, configure, get_settings
+from sift_downloads.index import (
+    Manifest,
+    embed_texts,
+    purge_index,
+    rebuild_index,
+    unlock_file,
+    update_index,
+)
 from sift_downloads.ingest import (
     REASON_LOCKED,
     REASON_NO_TEXT,
     content_key,
     scan_source,
 )
+from sift_downloads.retrieve import search
 from sift_downloads.store import VectorStore
 
 # --- what gets scanned -----------------------------------------------------
@@ -561,3 +570,70 @@ def test_a_no_op_sync_keeps_the_cached_store(make_file, embedder):
 
     assert not stats.changed, "sanity: nothing changed on the second sync"
     assert get_store() is before, "a no-op sync threw away a still-valid store"
+
+
+# --- consent, checked where the bytes actually leave ------------------------
+#
+# The CLI gates every embedding subcommand through preflight(), so these paths
+# are covered for anyone typing `sift`. The library entry points documented in
+# __init__.py are not: `update_index()` called straight from Python would embed
+# the whole folder with a cloud model and never ask. The check therefore lives
+# in embed_texts, which is the one place both the document path and the query
+# path have to pass through.
+
+def test_embedding_a_document_with_a_cloud_model_needs_consent():
+    configure(embed_model="openai/text-embedding-3-small", allow_cloud=False)
+
+    with pytest.raises(ConfigError, match="without consent"):
+        embed_texts(["balance carried forward 4,120.55"])
+
+
+def test_the_library_indexing_path_is_gated(make_file):
+    """The reported repro: update_index() from Python, with no CLI in sight."""
+    make_file("statement.txt", "account balance 1234")
+    configure(embed_model="openai/text-embedding-3-small", allow_cloud=False)
+
+    with pytest.raises(ConfigError, match="without consent"):
+        update_index()
+
+
+def test_the_question_is_not_embedded_before_consent_is_checked(make_file, embedder):
+    """generate.prepare() checked consent AFTER search() had already embedded
+    the question, so the query left the machine on the way to the guard.
+
+    The index has to be built under the SAME cloud model the query then uses,
+    or the store's own model check refuses the load first and the query never
+    reaches the embedding step at all. Consent given once and not given in a
+    later process is the ordinary way this happens.
+    """
+    make_file("statement.txt", "account balance 1234")
+    configure(embed_model="openai/text-embedding-3-small", allow_cloud=True)
+    update_index(embedder=embedder)
+    configure(embed_model="openai/text-embedding-3-small", allow_cloud=False)
+
+    with pytest.raises(ConfigError, match="without consent"):
+        search("what is my balance")
+
+
+def test_consent_lets_the_embedding_through(monkeypatch):
+    """The guard must gate the un-consented case only — not cloud use as such."""
+    import litellm
+
+    response = SimpleNamespace(data=[{"index": 0, "embedding": [0.1, 0.2, 0.3]}])
+    monkeypatch.setattr(litellm, "embedding", lambda **kwargs: response)
+    configure(embed_model="openai/text-embedding-3-small", allow_cloud=True)
+
+    assert embed_texts(["one chunk"]).shape == (1, 3)
+
+
+def test_a_caller_supplied_embedder_is_not_gated(make_file, embedder):
+    """Deliberate carve-out: an `embedder=` argument is the caller's own code,
+    so sift is not the one sending anything. This is also what lets the rest of
+    the suite run without a model server.
+    """
+    make_file("statement.txt", "account balance 1234")
+    configure(embed_model="openai/text-embedding-3-small", allow_cloud=False)
+
+    stats = update_index(embedder=embedder)
+
+    assert stats.chunks_total > 0

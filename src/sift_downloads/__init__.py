@@ -9,6 +9,9 @@ Usable as a library as well as a CLI:
     hits = find_files("rental agreement")  # ranked files
     result = answer("what is my notice period?")
     print(result.text, result.sources)
+
+A cloud embedding or chat model needs consent first: set SIFT_ALLOW_CLOUD=1, or
+these calls refuse rather than send the text of your documents to a provider.
 """
 import os
 
