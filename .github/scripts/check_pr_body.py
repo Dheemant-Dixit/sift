@@ -27,6 +27,20 @@ EVAL_TRIGGERS = ("chunk.py", "store.py", "retrieve.py", "generate.py", "config.p
 
 _HEADING = re.compile(r"^\s{0,3}#{2,3}\s+(.*?)\s*$")
 _COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+_FENCE = re.compile(r"```.*?```", re.DOTALL)
+_CODE_SPAN = re.compile(r"`[^`\n]*`")
+
+
+def without_code(text: str) -> str:
+    """Drop fenced blocks and inline code spans.
+
+    Used for the leftover-comment rule only. A `<!-- -->` inside backticks is
+    prose *about* a comment, not one left behind — PR #13's own body quoted the
+    rule in a table and the check rejected it. Deliberately not applied to the
+    evals rule: pasting the run inside a fence is the most natural way to
+    report it, and stripping there would reject the best possible answer.
+    """
+    return _CODE_SPAN.sub("", _FENCE.sub("", text))
 
 
 def sections(body: str) -> dict[str, str]:
@@ -49,7 +63,7 @@ def problems(body: str, changed_files: list[str]) -> list[str]:
     present = sections(body)
     touches_code = any(f.startswith(CODE_PREFIXES) for f in changed_files)
 
-    if _COMMENT.search(body):
+    if _COMMENT.search(without_code(body)):
         found.append(
             "The body still contains a `<!-- -->` comment from the template. "
             "Delete each one as you answer it."

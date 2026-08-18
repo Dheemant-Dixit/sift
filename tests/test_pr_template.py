@@ -178,3 +178,38 @@ def test_main_exits_zero_on_a_good_body(tmp_path, monkeypatch):
     files.write_text("docs/RELEASING.md\n")
     monkeypatch.setenv("PR_BODY", "## Verification\n\nDocs only.\n")
     assert check.main([str(files)]) == 0
+
+
+# --- quoting a comment is not leaving one behind ------------------------------
+
+def test_a_comment_marker_inside_backticks_is_not_a_leftover():
+    """PR #13 introduced this check and its own body documented the rule as
+    `<!-- -->`, in a table, inside backticks. The check fired on it.
+
+    A required context has no bypass, so a rule that cannot tell prose about a
+    comment from an actual comment is worse than no rule."""
+    body = (
+        "## What changed\n\n| always | no leftover `<!-- -->` comments |\n\n"
+        "## Verification\n\n507 tests.\n"
+    )
+    assert check.problems(body, CODE) == []
+
+
+def test_a_comment_inside_a_fenced_block_is_not_a_leftover():
+    body = (
+        "## What changed\n\nThe template reads:\n\n"
+        "```markdown\n<!-- delete this as you answer it -->\n```\n\n"
+        "## Verification\n\n507 tests.\n"
+    )
+    assert check.problems(body, CODE) == []
+
+
+def test_the_evals_claim_still_counts_inside_a_fenced_block():
+    """Code is stripped for the comment rule ONLY. Pasting the eval run is the
+    most natural way to report it, and stripping fences here would reject the
+    best possible answer."""
+    body = (
+        "## What changed\n\nFaster.\n\n"
+        "## Verification\n\n```\n$ pytest evals/\n17 passed\n```\n"
+    )
+    assert check.problems(body, RETRIEVAL) == []
