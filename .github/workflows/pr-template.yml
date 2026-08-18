@@ -1,0 +1,39 @@
+name: PR template
+
+# Deliberately not a job in ci.yml. release.yml calls that workflow via
+# workflow_call, where there is no pull request to inspect — a body check
+# there would either fail every release or need an `if:` that quietly
+# disables it, which is how a required context stops reporting.
+on:
+  pull_request:
+    # `edited` is the one that matters. Without it, an author who fixes the
+    # description never gets a re-run, and a required check that cannot
+    # re-report blocks the merge with no bypass and no owner override.
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  # The job id is the status-check context name. Renaming it silently removes
+  # the gate, because the ruleset names every context individually.
+  pr-template:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: List the files this pull request changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: gh pr view "$PR_NUMBER" --repo "$REPO" --json files --jq '.files[].path' > changed.txt
+
+      # The body is author-controlled text, so it arrives as an environment
+      # variable. `${{ }}` is pasted in before the shell parses the line, which
+      # would let a pull request description run commands on the runner.
+      - name: Check the pull request body
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 .github/scripts/check_pr_body.py changed.txt
