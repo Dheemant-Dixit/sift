@@ -132,7 +132,15 @@ def _records(pieces: list[dict], embed: Embedder) -> list[IndexedChunk]:
                      chunk_index=c["chunk_index"], text=c["text"],
                      index_text=c["index_text"], doc_head=c.get("doc_head", ""),
                      vector=vector)
-        for c, vector in zip(pieces, vectors)
+        # strict=True, because the alternative is silent data loss. If the
+        # embedder ever returns fewer vectors than it was given texts — a short
+        # provider response, a batch that failed quietly — a plain zip() stops
+        # at the shorter one and the surplus chunks simply never reach the
+        # store. Nothing downstream can notice: the store gets a consistent
+        # set, the sync reports success, and the documents are just not
+        # searchable. This turns that into a ValueError on the line that caused
+        # it, which is the whole difference between a bug and an outage.
+        for c, vector in zip(pieces, vectors, strict=True)
     ]
 
 

@@ -400,6 +400,48 @@ def test_embedding_nothing_makes_no_request(monkeypatch):
     assert len(embed_texts([])) == 0
 
 
+# --- a vector per chunk, or an error ---------------------------------------
+#
+# _records() is the single seam every chunk passes through on its way into the
+# store, and it pairs chunks with vectors positionally. If an embedder ever
+# returns fewer vectors than texts, a plain zip() drops the surplus chunks and
+# says nothing: the store stays internally consistent, the sync reports success,
+# and the documents are simply not searchable afterwards. These pin the loud
+# failure in place of the quiet one.
+
+def _pieces(n: int) -> list[dict]:
+    return [{"path": "/src/a.md", "filename": "a.md", "chunk_index": i,
+             "text": f"chunk {i} served", "index_text": f"chunk {i}"}
+            for i in range(n)]
+
+
+def test_an_embedder_returning_too_few_vectors_raises():
+    """The shape a short provider response takes: N texts in, N-1 vectors out."""
+    from sift_downloads.index import _records
+    from tests.conftest import fake_embed
+
+    with pytest.raises(ValueError):
+        _records(_pieces(3), lambda texts: fake_embed(texts)[:-1])
+
+
+def test_an_embedder_returning_too_many_vectors_raises():
+    """The other direction, so the guard isn't just an off-by-one in one sense."""
+    from sift_downloads.index import _records
+    from tests.conftest import fake_embed
+
+    with pytest.raises(ValueError):
+        _records(_pieces(3), lambda texts: fake_embed([*texts, "extra"]))
+
+
+def test_one_vector_per_chunk_is_not_disturbed():
+    """The guard must only fire on a mismatch — the ordinary path is every sync."""
+    from sift_downloads.index import _records
+    from tests.conftest import fake_embed
+
+    records = [r.index_text for r in _records(_pieces(3), fake_embed)]
+    assert records == ["chunk 0", "chunk 1", "chunk 2"]
+
+
 # --- the cached store must not outlive the file it was loaded from ---------
 #
 # retrieve.get_store() caches the loaded store for the whole process. Before the
