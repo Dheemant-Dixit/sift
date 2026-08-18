@@ -37,7 +37,12 @@ import litellm
 import numpy as np
 
 from sift_downloads.chunk import chunk_one
-from sift_downloads.config import Settings, get_settings, invalidate_store_cache
+from sift_downloads.config import (
+    Settings,
+    check_cloud_consent,
+    get_settings,
+    invalidate_store_cache,
+)
 from sift_downloads.ingest import REASON_LOCKED, file_fingerprint, load_document, scan_source
 from sift_downloads.store import IndexedChunk, IndexFormatMismatch, VectorStore, normalize
 
@@ -48,8 +53,20 @@ Embedder = Callable[[list[str]], np.ndarray]
 
 def embed_texts(texts: list[str], settings: Settings | None = None,
                 batch_size: int = 64) -> np.ndarray:
-    """Embed a list of strings into an (N, dim) float32 matrix."""
+    """Embed a list of strings into an (N, dim) float32 matrix.
+
+    Consent is checked HERE, rather than at the CLI boundary, because this is
+    the one place every path that sends text to a provider has to pass through
+    — documents via update_index, the question via retrieve.embed_query. The
+    CLI does gate it in preflight(), but the library entry points in
+    __init__.py do not, and `update_index()` called from Python would embed the
+    whole folder with a cloud model and never ask.
+
+    A caller-supplied `embedder=` bypasses this deliberately: that is the
+    caller's own code, so sift is not the one sending anything.
+    """
     settings = settings or get_settings()
+    check_cloud_consent(settings)
     vectors: list[list[float]] = []
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
