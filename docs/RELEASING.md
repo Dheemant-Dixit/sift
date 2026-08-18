@@ -234,13 +234,20 @@ for things that go *through* `release.yml`. A guard written in a workflow cannot
 stop someone from bypassing the workflow. These rules live in repository
 settings instead, and apply to pushes themselves.
 
-Configured 2026-08-17. All of them have an **empty bypass list** — they apply to
-the repository owner exactly as they apply to anyone else.
+Configured 2026-08-17; the context count last changed 2026-08-18, when `lint`
+joined the matrix. All of them have an **empty bypass list** — they apply to the
+repository owner exactly as they apply to anyone else.
+
+**The count in the table is not decoration.** Every context is named
+individually in the ruleset, so adding a job to `ci.yml` does not add it to the
+gate, and removing or renaming one leaves a required check that will never
+report again — which blocks every merge, with no bypass. Change the two
+together, or not at all.
 
 | Where | Rule | Stops |
 |---|---|---|
 | `main` | pull request required, 0 approvals | pushing straight to the branch releases are cut from |
-| `main` | all 10 CI contexts must pass, branch up to date | merging something the matrix has not seen |
+| `main` | all 11 CI contexts must pass, branch up to date | merging something the matrix has not seen |
 | `main` | squash only, linear history | a merge commit making `--is-ancestor` ambiguous |
 | `main` | no force-push, no deletion | rewriting history under an already-published tag |
 | `refs/tags/v*` | no update, no force-move | a tag that no longer describes what PyPI shipped |
