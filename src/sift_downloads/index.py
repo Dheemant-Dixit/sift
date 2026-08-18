@@ -54,7 +54,17 @@ def embed_texts(texts: list[str], settings: Settings | None = None,
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
         resp = litellm.embedding(model=settings.embed_model, input=batch)
-        vectors.extend(item["embedding"] for item in resp.data)
+        # Count and order are both checked here, because neither is visible
+        # anywhere later. `zip(..., strict=True)` below catches a wrong total,
+        # but a batch returned complete and out of order has the right total —
+        # it just pairs every chunk with a different chunk's vector, and the
+        # sync reports success. `index` is what the provider says the vector
+        # was for; it restarts at 0 per request, so sort inside the loop.
+        if len(resp.data) != len(batch):
+            raise ValueError(f"embedding provider returned {len(resp.data)} vectors "
+                             f"for {len(batch)} inputs")
+        vectors.extend(item["embedding"]
+                       for item in sorted(resp.data, key=lambda item: item["index"]))
         log.info("  embedded %d/%d", min(i + batch_size, len(texts)), len(texts))
     return np.array(vectors, dtype=np.float32)
 

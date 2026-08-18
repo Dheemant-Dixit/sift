@@ -335,7 +335,8 @@ def test_a_manifest_written_before_reasons_existed_still_loads(make_file, embedd
 
 def _fake_embedding_response(n_vectors, dim=4):
     from types import SimpleNamespace
-    return SimpleNamespace(data=[{"embedding": [0.1] * dim} for _ in range(n_vectors)])
+    return SimpleNamespace(data=[{"embedding": [0.1] * dim, "index": i}
+                                 for i in range(n_vectors)])
 
 
 def test_embed_texts_returns_one_row_per_text(monkeypatch):
@@ -398,6 +399,56 @@ def test_embedding_nothing_makes_no_request(monkeypatch):
     monkeypatch.setattr(litellm, "embedding",
                         lambda **kw: pytest.fail("no texts means no request"))
     assert len(embed_texts([])) == 0
+
+
+# --- what comes back must match what went out, in count and in order --------
+
+def test_embed_texts_puts_a_shuffled_batch_back_in_input_order(monkeypatch):
+    """`index` says where a vector belongs; the position in `data` does not.
+
+    A provider that returns the right number of vectors in the wrong order is
+    invisible to `zip(..., strict=True)` downstream — the count matches, so
+    every chunk is paired with a different chunk's vector and nothing raises.
+    `index` restarts at 0 for each request, so the reordering has to happen
+    per batch, not once over the accumulated list.
+    """
+    import litellm
+
+    from sift_downloads.index import embed_texts
+
+    def backwards(model, input):
+        from types import SimpleNamespace
+        # the vector encodes its own text, so the assertion is "each row is the
+        # vector for its own text" rather than a proxy for it
+        data = [{"embedding": [float(ord(text))] * 4, "index": i}
+                for i, text in enumerate(input)]
+        return SimpleNamespace(data=list(reversed(data)))
+
+    monkeypatch.setattr(litellm, "embedding", backwards)
+    matrix = embed_texts(["a", "b", "c"], batch_size=2)
+    assert [row[0] for row in matrix] == [97.0, 98.0, 99.0]
+
+
+def test_embed_texts_rejects_a_short_batch(monkeypatch):
+    """One vector short is silent data loss: the chunk is never searchable."""
+    import litellm
+
+    from sift_downloads.index import embed_texts
+    monkeypatch.setattr(litellm, "embedding",
+                        lambda model, input: _fake_embedding_response(len(input) - 1))
+    with pytest.raises(ValueError, match="2 vectors for 3"):
+        embed_texts(["a", "b", "c"])
+
+
+def test_embed_texts_rejects_a_long_batch(monkeypatch):
+    """Surplus vectors shift every later chunk onto the wrong one."""
+    import litellm
+
+    from sift_downloads.index import embed_texts
+    monkeypatch.setattr(litellm, "embedding",
+                        lambda model, input: _fake_embedding_response(len(input) + 1))
+    with pytest.raises(ValueError, match="4 vectors for 3"):
+        embed_texts(["a", "b", "c"])
 
 
 # --- a vector per chunk, or an error ---------------------------------------
