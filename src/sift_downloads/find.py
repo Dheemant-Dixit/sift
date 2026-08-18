@@ -35,7 +35,14 @@ from pathlib import Path
 
 from sift_downloads.config import Settings, get_settings
 from sift_downloads.index import Manifest
-from sift_downloads.ingest import REASON_LOCKED, REASON_NO_TEXT
+from sift_downloads.ingest import (
+    REASON_DEFERRED,
+    REASON_HIDDEN,
+    REASON_LOCKED,
+    REASON_NO_TEXT,
+    REASON_NOT_A_FILE,
+    REASON_PARTIAL,
+)
 from sift_downloads.retrieve import search
 
 log = logging.getLogger(__name__)
@@ -53,8 +60,8 @@ _STOPWORDS = frozenset({
 
 # Skip reasons that mean "this file is not worth showing you at all", as opposed
 # to "this file exists but its contents couldn't be read".
-_UNLISTABLE_REASONS = frozenset({"hidden file", "download in progress",
-                                 "still being written", "not a file"})
+_UNLISTABLE_REASONS = frozenset({REASON_HIDDEN, REASON_PARTIAL,
+                                 REASON_DEFERRED, REASON_NOT_A_FILE})
 
 # Splits a filename into words: on separators, and also at camelCase joins and
 # letter/digit boundaries, so "RentalAgreement2024.pdf" -> rental agreement 2024.

@@ -27,6 +27,7 @@ from rich.padding import Padding
 from rich.text import Text
 
 from sift_downloads.config import ConfigError, Settings, get_settings
+from sift_downloads.humanize import MATCH_MARKER, human_age, human_size
 from sift_downloads.session import HELP, Request, Session, UiCommand, parse
 from sift_downloads.store import IndexProblem
 
@@ -38,9 +39,6 @@ PROMPT_STYLE = Style.from_dict({
     "frame.label": "#8a8a8a",
     "": "",
 })
-
-MATCH_MARKER = {"content": "·", "filename": "name", "both": "·+name"}
-
 
 def _clip(text: str, room: int) -> str:
     """Collapse whitespace and cut to `room` columns, with an ellipsis."""
@@ -88,16 +86,6 @@ def read_line(history: InMemoryHistory, title: str = "sift") -> str | None:
 # ---------------------------------------------------------------------------
 # Drawing
 # ---------------------------------------------------------------------------
-
-def _size(num_bytes: int) -> str:
-    from sift_downloads.cli import human_size
-    return human_size(num_bytes)
-
-
-def _age(timestamp: float) -> str:
-    from sift_downloads.cli import human_age
-    return human_age(timestamp)
-
 
 class Ui:
     """Everything that writes to the screen."""
@@ -155,7 +143,7 @@ class Ui:
         for i, hit in enumerate(hits, 1):
             self.console.print(self._result_heading(i, hit, width))
             self.console.print(
-                f"      [dim]{_size(hit.size)} · {_age(hit.modified)}[/dim]")
+                f"      [dim]{human_size(hit.size)} · {human_age(hit.modified)}[/dim]")
             if hit.snippet:
                 self.console.print(f"      [dim italic]{_clip(hit.snippet, room)}[/dim italic]")
             elif hit.note:

@@ -57,6 +57,37 @@ def test_a_directory_is_not_a_file(source_dir):
     assert indexable(source_dir / "subfolder") == (False, "not a file")
 
 
+# --- the reasons two other modules branch on --------------------------------
+
+def test_a_deferred_file_is_counted_and_hidden_under_the_same_reason(source_dir,
+                                                                    monkeypatch):
+    """The scan's `deferred` counter and `find`'s filter must agree on one string.
+
+    These are the two branch sites the reason vocabulary exists for, and they
+    live in different modules. `watch.py` re-arms on `deferred`, so a scan that
+    stopped counting a half-written file would leave it unindexed forever;
+    `find` hiding a different set would list a `.crdownload` as a result. Both
+    read `REASON_DEFERRED`, and this is the test that says so out loud —
+    nothing else fails if one of them starts reading something else.
+    """
+    from sift_downloads import find as find_module
+    from sift_downloads.find import find_files
+    from sift_downloads.index import Manifest
+    from sift_downloads.ingest import REASON_DEFERRED
+
+    (source_dir / "Invoice.pdf").write_text("x")   # written this instant
+
+    scan = scan_source()
+    path = str(source_dir / "Invoice.pdf")
+    assert scan.deferred == 1
+    assert scan.skipped[path] == REASON_DEFERRED
+
+    Manifest(files={}, skipped=scan.skipped, duplicates={}).save()
+    monkeypatch.setattr(find_module, "search",
+                        lambda query, top_k=None, min_score=None, settings=None: [])
+    assert find_files("invoice") == []
+
+
 def test_directories_are_skipped_silently(source_dir, make_file):
     """A folder in Downloads is normal. Reporting it as 'skipped' is noise."""
     (source_dir / "unzipped-project").mkdir()
