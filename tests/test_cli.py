@@ -22,9 +22,10 @@ from pathlib import Path
 import pytest
 
 from sift_downloads import cli
-from sift_downloads.cli import build_parser, human_age, human_size, main, with_default_command
+from sift_downloads.cli import build_parser, main, with_default_command
 from sift_downloads.config import ConfigError, get_settings
 from sift_downloads.find import FileHit
+from sift_downloads.humanize import human_age, human_size
 from sift_downloads.index import SyncStats
 
 

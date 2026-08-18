@@ -37,11 +37,23 @@ class PdfLocked(Exception):
     """A PDF that needs a password sift wasn't given."""
 
 
-# Why a file produced no text. Recorded in the manifest and shown to the user,
-# so these strings are part of the interface — `sift unlock` looks for
-# REASON_LOCKED to decide which files it can help with.
+# Why a file isn't in the index. Recorded in the manifest and shown to the
+# user, so these strings are part of the interface — and three other modules
+# branch on them, which is the real reason none of them is written twice.
+# `sift unlock` looks for REASON_LOCKED to decide which files it can help
+# with; `scan_source` counts REASON_DEFERRED and `watch.py` re-arms on that
+# count; `find.py` hides four of them from results entirely.
+#
+# Two reasons stay f-strings because they carry a value — the exception name,
+# the size limit — and nothing branches on either.
 REASON_LOCKED = "password-protected"
 REASON_NO_TEXT = "no text layer (scanned or image-only)"
+REASON_NOT_A_FILE = "not a file"
+REASON_HIDDEN = "hidden file"
+REASON_PARTIAL = "download in progress"
+REASON_UNSUPPORTED = "unsupported type"
+REASON_EMPTY = "empty file"
+REASON_DEFERRED = "still being written"
 
 # pypdf narrates every malformed PDF it meets ("invalid pdf header", "EOF marker
 # not found") straight to its own logger. On a Downloads folder that is a wall
@@ -191,24 +203,24 @@ def is_indexable(path: Path, settings: Settings) -> tuple[bool, str]:
     has an answer that doesn't require reading the source.
     """
     if not path.is_file():
-        return False, "not a file"
+        return False, REASON_NOT_A_FILE
     if path.name.startswith("."):
-        return False, "hidden file"
+        return False, REASON_HIDDEN
     suffix = path.suffix.lower()
     if suffix in PARTIAL_SUFFIXES:
-        return False, "download in progress"
+        return False, REASON_PARTIAL
     if suffix not in settings.extensions:
-        return False, "unsupported type"
+        return False, REASON_UNSUPPORTED
     try:
         st = path.stat()
     except OSError as e:
         return False, f"unreadable ({type(e).__name__})"
     if st.st_size == 0:
-        return False, "empty file"
+        return False, REASON_EMPTY
     if st.st_size > settings.max_file_bytes:
         return False, f"larger than {settings.max_file_mb}MB"
     if time.time() - st.st_mtime < FRESHNESS_GUARD_SECONDS:
-        return False, "still being written"
+        return False, REASON_DEFERRED
     return True, ""
 
 
@@ -240,11 +252,11 @@ def scan_source(settings: Settings | None = None) -> ScanResult:
         ok, reason = is_indexable(path, settings)
         if ok:
             candidates.append(path)
-        elif reason == "not a file":
+        elif reason == REASON_NOT_A_FILE:
             continue  # directories aren't interesting enough to report
         else:
             skipped[str(path)] = reason
-            if reason == "still being written":
+            if reason == REASON_DEFERRED:
                 deferred += 1
 
     # Collapse byte-identical copies down to one canonical file. Without this,
