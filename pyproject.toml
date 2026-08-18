@@ -43,7 +43,11 @@ dependencies = [
 watch = ["watchdog>=4.0"]
 # pytest-randomly shuffles test order every run, which is what catches tests
 # that only pass because an earlier one left state behind.
-dev = ["pytest>=8.0", "pytest-cov>=5.0", "pytest-randomly>=3.15"]
+#
+# ruff is pinned to a minor range on purpose: every minor release adds rules,
+# and an unpinned linter turns "someone else published a version" into "your
+# unrelated PR is red". Widen it deliberately, as its own change.
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "pytest-randomly>=3.15", "ruff>=0.16,<0.17"]
 
 [project.urls]
 Homepage = "https://github.com/Dheemant-Dixit/sift"
@@ -67,6 +71,52 @@ packages = ["src/sift_downloads"]
 # so the litellm env-var side effect at the top of __init__.py never runs here.
 [tool.hatch.version]
 path = "src/sift_downloads/__init__.py"
+
+# There was no linter here at all until now, which is how five unused imports,
+# a dead local and a `# noqa` for a rule that no longer fires accumulated in a
+# repo this small. The selection is deliberately narrow: rules that catch a
+# mistake, not rules that impose a house style nobody agreed to.
+[tool.ruff]
+line-length = 100          # what the code already targets; 8 lines were over
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle — whitespace, line length
+    "F",        # pyflakes — unused imports, undefined names, dead locals
+    "I",        # isort — so no diff ever contains an incidental import reshuffle
+    "UP",       # pyupgrade — syntax the >=3.10 floor already permits
+    "B",        # bugbear — the one real defect this whole change found is B905
+    "C4",       # comprehension and call forms
+    "SIM",      # simplifiable constructs
+    "RUF",      # ruff's own, including RUF100: a suppression that stopped applying
+]
+ignore = [
+    # These two are not wrong in general. They are wrong here, and saying so in
+    # one place beats scattering `# noqa` over the sites they misjudge.
+    #
+    # RUF022 wants __all__ alphabetised. It is grouped by module instead —
+    # config, then find, then generate, then index/retrieve — mirroring the
+    # pipeline in the README. Sorting it would split `answer` from `Answer`
+    # and file both away from `find_files`, telling a reader strictly less.
+    "RUF022",
+    # SIM102 wants the nested `if`s in ingest.extract_pdf collapsed with `and`.
+    # The comment between them explains the INNER condition — why the empty
+    # password is tried first — and has nowhere to live in a collapsed form.
+    # The nesting is carrying the explanation.
+    "SIM102",
+]
+
+[tool.ruff.lint.isort]
+# Keeps first-party imports in their own block BELOW third-party, which is what
+# holds `import litellm` above the config import in index.py. That ordering is a
+# hard constraint, not a preference — see the LITELLM_LOCAL_MODEL_COST_MAP note
+# in __init__.py — so the import sorter has to be told about it explicitly
+# rather than left to guess from the directory layout.
+# `evalset` and `tests` are named here for the same reason: neither lives on
+# sys.path the way an installed package does, so isort would file them as
+# third-party and hoist `from evalset import CORPUS` above the sift imports in
+# evals/conftest.py — sorting a local helper into the same block as pytest.
+known-first-party = ["sift_downloads", "evalset", "tests"]
 
 [tool.pytest.ini_options]
 # testpaths deliberately excludes evals/: those need Ollama and a chat model,
