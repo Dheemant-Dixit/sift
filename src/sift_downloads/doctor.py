@@ -16,9 +16,8 @@ import platform
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from pathlib import Path
 
-from sift_downloads.config import (ConfigError, Settings, get_settings)
+from sift_downloads.config import ConfigError, Settings, get_settings
 from sift_downloads.store import IndexProblem, VectorStore
 
 OK, WARN, FAIL = "ok", "warn", "fail"

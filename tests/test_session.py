@@ -17,7 +17,6 @@ from rich.console import Console
 from sift_downloads.session import HELP, Session, UiCommand, parse
 from sift_downloads.ui import Ui, _clip
 
-
 # --- parsing ---------------------------------------------------------------
 
 def test_bare_text_searches():

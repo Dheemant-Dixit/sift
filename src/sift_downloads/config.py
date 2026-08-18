@@ -424,8 +424,8 @@ def require_source_dir(settings: Settings | None = None) -> Path:
         return source
 
     hint = (
-        f"Point sift somewhere else with:  sift <command> --source /path/to/folder\n"
-        f"  or set it permanently:          export SIFT_SOURCE=/path/to/folder"
+        "Point sift somewhere else with:  sift <command> --source /path/to/folder\n"
+        "  or set it permanently:          export SIFT_SOURCE=/path/to/folder"
     )
     if not source.exists():
         raise ConfigError(f"Source folder does not exist: {source}\n  {hint}")

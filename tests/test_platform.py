@@ -254,7 +254,7 @@ def test_a_missing_watchdog_explains_the_extra_to_install(monkeypatch, make_file
 class FakeObserver:
     """Stands in for watchdog's Observer, recording how it was driven."""
 
-    instances: list["FakeObserver"] = []
+    instances: list[FakeObserver] = []
 
     def __init__(self):
         self.scheduled: list[tuple[object, str, bool]] = []

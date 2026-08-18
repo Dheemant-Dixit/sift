@@ -246,7 +246,7 @@ class VectorStore:
 
     @classmethod
     def load(cls, path: Path | None = None, settings: Settings | None = None,
-             check_model: bool = True) -> "VectorStore":
+             check_model: bool = True) -> VectorStore:
         """Load a store from disk (an empty store if there isn't one yet).
 
         allow_pickle=False means loading can never execute code, so an index

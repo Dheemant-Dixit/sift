@@ -23,9 +23,14 @@ import pytest
 
 from sift_downloads import generate
 from sift_downloads.config import ConfigError, configure
-from sift_downloads.generate import (Answer, AnswerStream, answer,
-                                     build_context_block, build_messages,
-                                     prepare)
+from sift_downloads.generate import (
+    Answer,
+    AnswerStream,
+    answer,
+    build_context_block,
+    build_messages,
+    prepare,
+)
 
 
 def chunk(filename="notes.md", text="some text", score=0.9):

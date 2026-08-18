@@ -17,10 +17,13 @@ from pathlib import Path
 import pytest
 
 from sift_downloads.config import configure, get_settings
-from sift_downloads.ingest import (extract_docx, is_indexable,
-                                   iter_source_files, load_documents,
-                                   scan_source)
-
+from sift_downloads.ingest import (
+    extract_docx,
+    is_indexable,
+    iter_source_files,
+    load_documents,
+    scan_source,
+)
 
 # os.geteuid does not exist on Windows, and this is evaluated at import time —
 # a bare os.geteuid() here fails collection for the whole file on the Windows

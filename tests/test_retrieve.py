@@ -18,7 +18,7 @@ import pytest
 
 import sift_downloads
 from sift_downloads import retrieve
-from sift_downloads.config import configure, get_settings
+from sift_downloads.config import configure
 from sift_downloads.index import update_index
 from sift_downloads.retrieve import embed_query, get_store, search
 

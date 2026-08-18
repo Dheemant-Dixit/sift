@@ -14,9 +14,18 @@ import pytest
 
 from sift_downloads import doctor
 from sift_downloads.config import ConfigError, configure, get_settings
-from sift_downloads.doctor import (FAIL, OK, WARN, Check, check_index,
-                                   check_models, check_privacy, check_source,
-                                   preflight, run_checks)
+from sift_downloads.doctor import (
+    FAIL,
+    OK,
+    WARN,
+    Check,
+    check_index,
+    check_models,
+    check_privacy,
+    check_source,
+    preflight,
+    run_checks,
+)
 
 
 @pytest.fixture

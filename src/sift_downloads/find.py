@@ -167,7 +167,7 @@ def find_files(query: str, limit: int = 10, recent_first: bool = False,
 
     # Every file the last scan saw is a candidate, including ones whose contents
     # could not be read — those are exactly the files people struggle to find.
-    candidates: dict[str, str] = {path: "" for path in manifest.files}
+    candidates: dict[str, str] = dict.fromkeys(manifest.files, "")
     for path, reason in manifest.skipped.items():
         if reason not in _UNLISTABLE_REASONS:
             candidates[path] = reason

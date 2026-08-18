@@ -30,8 +30,8 @@ def no_preflight(monkeypatch):
 def fake_embedder(monkeypatch):
     """`cmd_unlock` calls unlock_file() without an embedder, so it would reach
     for the real one. Patch the seam it actually falls back to."""
-    from tests.conftest import fake_embed
     import sift_downloads.index as index
+    from tests.conftest import fake_embed
     monkeypatch.setattr(index, "embed_texts",
                         lambda texts, settings=None, **kw: fake_embed(texts))
 

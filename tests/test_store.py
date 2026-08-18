@@ -15,8 +15,13 @@ import numpy as np
 import pytest
 
 from sift_downloads.config import configure, get_settings
-from sift_downloads.store import (CorruptIndex, IndexedChunk, IndexModelMismatch,
-                        VectorStore, normalize)
+from sift_downloads.store import (
+    CorruptIndex,
+    IndexedChunk,
+    IndexModelMismatch,
+    VectorStore,
+    normalize,
+)
 
 
 def _chunk(text: str, path: str, i: int, vec) -> IndexedChunk:

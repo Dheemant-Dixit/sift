@@ -13,10 +13,9 @@ from __future__ import annotations
 
 import pytest
 
+from evalset import CORPUS, MIN_SCORE
 from sift_downloads import config, doctor
 from sift_downloads.config import configure
-
-from evalset import CORPUS, MIN_SCORE
 
 
 def _missing_models(settings) -> list[str]:

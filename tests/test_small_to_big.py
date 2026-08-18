@@ -27,8 +27,7 @@ from sift_downloads.chunk import chunk_one, document_head, line_blocks
 from sift_downloads.config import ConfigError, configure
 from sift_downloads.generate import build_context_block
 from sift_downloads.index import update_index
-from sift_downloads.store import (FORMAT_VERSION, IndexFormatMismatch, IndexedChunk,
-                                  VectorStore)
+from sift_downloads.store import FORMAT_VERSION, IndexedChunk, IndexFormatMismatch, VectorStore
 
 # A form shaped like the one that broke: the owner is named once at the top, and
 # a blank line separates every row — which is what let a floor of `max // 3`

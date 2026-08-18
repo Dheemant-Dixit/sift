@@ -22,9 +22,15 @@ from pathlib import Path
 import pytest
 
 from sift_downloads import config
-from sift_downloads.config import (ConfigError, _xdg_downloads, configure,
-                                   default_data_dir, default_downloads_dir,
-                                   get_settings, require_source_dir)
+from sift_downloads.config import (
+    ConfigError,
+    _xdg_downloads,
+    configure,
+    default_data_dir,
+    default_downloads_dir,
+    get_settings,
+    require_source_dir,
+)
 
 
 @pytest.fixture

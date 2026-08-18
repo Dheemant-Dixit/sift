@@ -24,7 +24,7 @@ import os
 # setdefault, so anyone who genuinely wants the fetch can still ask for it.
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
-from sift_downloads.config import Settings, configure, get_settings  # noqa: E402
+from sift_downloads.config import Settings, configure, get_settings
 
 __version__ = "0.2.0"
 

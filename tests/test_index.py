@@ -18,12 +18,14 @@ import os
 import pytest
 
 from sift_downloads.config import configure, get_settings
-from sift_downloads.index import (Manifest, purge_index, rebuild_index,
-                                  unlock_file, update_index)
-from sift_downloads.ingest import (REASON_LOCKED, REASON_NO_TEXT, content_key,
-                                   is_indexable, scan_source)
+from sift_downloads.index import Manifest, purge_index, rebuild_index, unlock_file, update_index
+from sift_downloads.ingest import (
+    REASON_LOCKED,
+    REASON_NO_TEXT,
+    content_key,
+    scan_source,
+)
 from sift_downloads.store import VectorStore
-
 
 # --- what gets scanned -----------------------------------------------------
 
@@ -338,6 +340,7 @@ def _fake_embedding_response(n_vectors, dim=4):
 
 def test_embed_texts_returns_one_row_per_text(monkeypatch):
     import litellm
+
     from sift_downloads.index import embed_texts
     monkeypatch.setattr(litellm, "embedding",
                         lambda model, input: _fake_embedding_response(len(input)))
@@ -348,6 +351,7 @@ def test_embed_texts_is_float32(monkeypatch):
     """The store asserts on dtype; a float64 matrix doubles the index size."""
     import litellm
     import numpy as np
+
     from sift_downloads.index import embed_texts
     monkeypatch.setattr(litellm, "embedding",
                         lambda model, input: _fake_embedding_response(len(input)))
@@ -357,6 +361,7 @@ def test_embed_texts_is_float32(monkeypatch):
 def test_embed_texts_batches_long_inputs(monkeypatch):
     """One request per 64 chunks, not one per chunk and not one giant request."""
     import litellm
+
     from sift_downloads.index import embed_texts
     sizes = []
 
@@ -371,6 +376,7 @@ def test_embed_texts_batches_long_inputs(monkeypatch):
 
 def test_embed_texts_uses_the_configured_model(monkeypatch):
     import litellm
+
     from sift_downloads.config import configure
     from sift_downloads.index import embed_texts
     seen = {}
@@ -387,6 +393,7 @@ def test_embed_texts_uses_the_configured_model(monkeypatch):
 
 def test_embedding_nothing_makes_no_request(monkeypatch):
     import litellm
+
     from sift_downloads.index import embed_texts
     monkeypatch.setattr(litellm, "embedding",
                         lambda **kw: pytest.fail("no texts means no request"))
