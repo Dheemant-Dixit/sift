@@ -59,6 +59,9 @@ def a_hit(name="lease.md", **kw):
 @pytest.mark.parametrize("num, expected", [
     (0, "0B"), (512, "512B"), (1024, "1.0KB"), (1536, "1.5KB"),
     (1048576, "1.0MB"), (1073741824, "1.0GB"), (5 * 1073741824, "5.0GB"),
+    # Past the largest unit. "GB" is last, so the loop returns here too — if it
+    # ever stopped doing that, human_size would return None instead.
+    (5 * 1024 ** 5, "5242880.0GB"),
 ])
 def test_sizes_are_rendered_for_humans(num, expected):
     assert human_size(num) == expected
@@ -438,6 +441,20 @@ def test_doctor_exits_one_and_prints_the_fix_when_something_fails(monkeypatch, c
     monkeypatch.setattr(doctor, "run_checks", lambda *a, **k: [check])
     assert main(["doctor"]) == 1
     assert "brew install ollama" in capsys.readouterr().out
+
+
+def test_doctor_reads_the_warn_constant_rather_than_a_copy_of_it(monkeypatch, capsys):
+    """cmd_doctor looks its symbol up by doctor.WARN, not by the string "warn".
+
+    The two happen to be equal today. Move the constant and a renderer holding a
+    copy raises KeyError at print time — after every check has already run.
+    """
+    import sift_downloads.doctor as doctor
+    monkeypatch.setattr(doctor, "WARN", "caution")
+    check = doctor.Check(name="source", status=doctor.WARN, detail="folder is empty")
+    monkeypatch.setattr(doctor, "run_checks", lambda *a, **k: [check])
+    assert main(["doctor"]) == 0
+    assert "[warn] source: folder is empty" in capsys.readouterr().out
 
 
 # --- watch and ui delegate ------------------------------------------------

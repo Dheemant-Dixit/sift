@@ -122,7 +122,7 @@ def load_document(path: Path, password: str | None = None) -> tuple[dict | None,
     """Extract one file into a record.
 
     Returns (record, "") on success and (None, reason) on failure, following the
-    same shape as is_indexable() above. The reason matters: it is stored in the
+    same shape as is_indexable() below. The reason matters: it is stored in the
     manifest and shown to the user, and it is the difference between telling
     someone their bank statement needs a password and telling them it needs OCR.
 
