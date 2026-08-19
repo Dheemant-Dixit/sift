@@ -168,9 +168,10 @@ Your Downloads folder holds bank statements, ID scans and contracts. So:
   `sift unlock` — that text is stored in the clear like everything else.
 - **Cloud models need explicit permission.** sift can use Anthropic, OpenAI or
   Gemini through [litellm](https://github.com/BerriAI/litellm), but naming a
-  cloud model is not enough. It refuses without `--allow-cloud` and then warns
-  you each session. Sending your documents to someone else's server should be a
-  decision, not a side effect of editing a config value.
+  cloud model is not enough. It refuses without `--allow-cloud`, and once you
+  have allowed it, every cloud model names itself before it is used. Sending
+  your documents to someone else's server should be a decision, not a side
+  effect of editing a config value.
 
 ```bash
 export ANTHROPIC_API_KEY=sk-...
@@ -185,7 +186,9 @@ Permission is asked per command, for the models that command actually calls.
 `sift index` and `sift find` only ever use the embedding model, so a local
 embedder plus a cloud chat model indexes and searches with no `--allow-cloud`
 at all; `sift ask` is where the question is put to the cloud model, so that is
-where it asks. The warning follows the same rule, and names each provider once.
+where it asks. The warning follows the same rule and names each cloud model
+once, so a run that embeds with one provider and answers with another tells you
+about both.
 
 **Running a model server yourself?** `ollama/` and `lm_studio/` always count as
 local — they only ever reach a server you chose. `huggingface/` is different:
@@ -234,9 +237,15 @@ time, so a sync only re-reads what actually changed — about a second, against
 forty for a full rebuild. That is why `find` and `ask` can afford to sync before
 every query.
 
-If you want it updated in the background, [`contrib/`](contrib/) has ready-made
-launchd and systemd files. They are documented, not installed for you. sift
-never writes to your system.
+`sift watch` keeps it updated while you work: it re-syncs a few seconds after
+the folder goes quiet, and it runs one sync at a time. Ctrl-C lets a sync that
+is already running finish — up to 30 seconds — rather than killing it partway
+and throwing the work away. Press Ctrl-C again to drop it immediately; the next
+sync picks up where it left off either way.
+
+If you want it updated without a terminal open, [`contrib/`](contrib/) has
+ready-made launchd and systemd files. They are documented, not installed for
+you. sift never writes to your system.
 
 ---
 
@@ -306,15 +315,20 @@ bar, and the full limitations.
 
 ```bash
 pip install -e ".[watch,dev]"
-pytest            # unit suite: no Ollama, touches no real folder
-pytest evals/     # answer quality: needs Ollama, ~40s
+pytest            # unit suite: 560 tests, ~3s. No Ollama, touches no real folder
+ruff check .      # both of the above are required CI checks
+pytest evals/     # answer quality: 17 tests, ~60s. Needs Ollama, never runs in CI
 ```
 
 The unit suite proves the code does what it says. It deliberately cannot reach
 a model — real embedding calls raise — so it can't tell you whether the answers
 are any good. [`evals/`](evals/) is that second suite: a small synthetic corpus
-that reproduces the two wrong-entity failures 0.2.0 fixed, so they can't come
-back unnoticed. It isn't run in CI, because it needs a model server.
+and a fixed set of questions, scored against real models. Of the two
+wrong-entity failures 0.2.0 fixed, one is genuinely pinned there — revert the
+fix and the test fails. The other does not reproduce on invented documents, so
+its test is labelled a guard rather than a proof.
+[`evals/README.md`](evals/README.md) says which is which, and why the
+difference matters. It isn't run in CI, because it needs a model server.
 
 Releases go out by pushing a `vX.Y.Z` tag — the workflow checks the tag against
 the packaged version, the changelog and `main` before it publishes anything, and

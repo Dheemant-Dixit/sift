@@ -175,7 +175,7 @@ else would pass while the real publish still failed.
 ## What actually runs
 
 ```
-tag push  ──▶ preflight ──┬──▶ CI (reusable call to ci.yml, 10 jobs)  ──┐
+tag push  ──▶ preflight ──┬──▶ CI (reusable call to ci.yml, 11 jobs)  ──┐
                           └──▶ build                                    ├──▶ pypi ──▶ github-release
                                                                         ┘
 manual run ──▶ verify-publisher        (nothing else; all five above are skipped)
@@ -184,7 +184,7 @@ manual run ──▶ verify-publisher        (nothing else; all five above are s
 | Job | Does | Fails cost |
 |---|---|---|
 | `preflight` | four guards, ~15s | delete tag, re-push |
-| `CI` | the same 10 jobs as a PR, on the tagged commit | delete tag, re-push |
+| `CI` | the same 11 jobs as a PR, on the tagged commit | delete tag, re-push |
 | `build` | build, `twine check --strict`, filename check, content audit, clean-venv install | delete tag, re-push |
 | `pypi` | trusted-publishing upload | see [partial upload](#the-upload-failed-partway) |
 | `github-release` | `gh release create` with the changelog section and both artifacts attached | re-run the job |
@@ -212,7 +212,8 @@ pushing one checks nothing. So:
   release up is easy to do and invisible afterwards.
 - **The full CI matrix must pass on the tagged commit**, not merely on main at
   some earlier point. `ci.yml` is called as a reusable workflow so it is the
-  same ten jobs, against the tree actually being packaged.
+  same eleven jobs — lint, nine matrix legs and coverage — against the tree
+  actually being packaged.
 - **The artifacts must carry the tagged version** in their filenames, must be
   exactly two, must pass `twine check --strict`, and the wheel must install into
   a clean virtualenv and report `sift X.Y.Z`. The test matrix runs against the
