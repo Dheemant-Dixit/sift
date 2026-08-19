@@ -425,15 +425,30 @@ Being honest about the edges:
 - **That the changelog is accurate** — only that a section exists.
 - **Anything about the tag's signature or authorship**, beyond it being an
   ancestor of `main`.
-- **The build and upload steps have not yet run for real.** As of 0.2.0 the
-  credential handshake is verified and the tag trigger and preflight guards are
-  verified (by a throwaway `v0.0.0` tag), but the reusable `CI` call, the build
-  job, the upload and `gh release create` have never executed. The first real
-  release will exercise them. Watch the `CI` job first — a reusable-workflow
-  call that fails to resolve stops everything, and it is the piece with no prior
-  runtime evidence at all.
+- **A partial upload.** Still the one failure with no evidence and no recovery,
+  because the only way to test it is to have it happen.
 
-That last point is deliberate. A test release would have proven the cheap-to-fix
-steps while leaving the one irreversible risk — a partial upload — untested
-anyway, in exchange for permanently spending a version number. Waiting was the
-cheaper option because every guard fails *before* the upload.
+Everything else here has now run. **0.3.0 was the first real release**, on
+2026-08-19, and it went end to end on the first attempt: `preflight` → `CI`
+(11 jobs, on the tagged commit) → `build` → the approval gate → `pypi` →
+`github-release`. No guard tripped and no tag was re-pushed.
+
+Three things had never executed before that run:
+
+- **The reusable `CI` call resolves.** It was the piece with no runtime evidence
+  at all, and a call that fails to resolve stops everything. Still the job to
+  watch first after editing either workflow.
+- **`build` passes on the real artifact** — `twine check --strict`, exactly two
+  files carrying the tagged version, the content audit, and a clean-venv install
+  reporting `sift 0.3.0`. It is also the first proof that the audit's `.env`
+  pattern is anchored correctly: `.env.example` ships, and the unanchored
+  version this page warns about would have failed here.
+- **The upload and `gh release create` work**, and the release carries the
+  changelog section with both artifacts attached.
+
+Until then this section read "the build and upload steps have not yet run for
+real", and waiting was the right call. A test release would have proven the
+cheap-to-fix steps while leaving the irreversible one untested anyway, in
+exchange for permanently spending a version number. Every guard fails *before*
+the upload, so the first real release was always the cheapest place to find
+out.
