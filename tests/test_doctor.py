@@ -66,12 +66,18 @@ def test_both_models_present_passes(ollama):
     assert any("running at" in c.detail for c in checks)
 
 
-def test_a_missing_model_names_the_exact_pull_command(ollama):
+def test_a_missing_model_points_at_sift_setup_and_says_which_model(ollama):
+    """`sift setup` pulls every missing model, so it beats one pull command.
+
+    The model is still named — by the check, which is where a reader looks to
+    find out what is wrong rather than what to type.
+    """
     ollama["models"] = ["nomic-embed-text:latest"]
     checks = check_models(get_settings())
     failed = [c for c in checks if c.failed]
     assert len(failed) == 1
-    assert failed[0].fix == "ollama pull llama3.1:8b"
+    assert failed[0].fix == "sift setup"
+    assert failed[0].name == "model ollama_chat/llama3.1:8b"
 
 
 def test_a_model_pulled_without_a_tag_still_counts_as_present(ollama):
@@ -94,7 +100,7 @@ def test_a_mixed_setup_still_checks_the_local_half(ollama):
     ollama["models"] = []
     configure(chat_model="anthropic/claude-sonnet-4-5")   # embed stays local
     failed = [c for c in check_models(get_settings()) if c.failed]
-    assert [c.fix for c in failed] == ["ollama pull nomic-embed-text"]
+    assert [c.fix for c in failed] == ["sift setup"]
 
 
 def test_a_local_non_ollama_model_is_never_called_non_local(monkeypatch, make_file):
