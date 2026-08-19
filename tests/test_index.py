@@ -637,3 +637,27 @@ def test_a_caller_supplied_embedder_is_not_gated(make_file, embedder):
     stats = update_index(embedder=embedder)
 
     assert stats.chunks_total > 0
+
+
+def test_indexing_the_folder_announces_the_cloud_model(make_file, monkeypatch, capsys):
+    """Consent is not the same as disclosure, and the scale is the whole point.
+
+    `sift ask` printed "document text is leaving this machine" before sending
+    one question. `sift index` sent the entire folder and said nothing. Consent
+    held on both paths — PR #16 put that check here — so nothing left that the
+    user had refused. What went unannounced was how much.
+    """
+    import litellm
+
+    from sift_downloads import config
+
+    monkeypatch.setattr(config, "_cloud_warned", False)  # a process-lifetime latch
+    monkeypatch.setattr(litellm, "embedding", lambda model, input, **kw: SimpleNamespace(
+        data=[{"index": i, "embedding": [0.1, 0.2, 0.3]} for i in range(len(input))]))
+    make_file("statement.txt", "closing balance 5,102.44 on 31 March")
+    configure(embed_model="openai/text-embedding-3-small", allow_cloud=True)
+
+    stats = update_index()
+
+    assert stats.chunks_total > 0, "sanity: nothing was embedded, so nothing left the machine"
+    assert "cloud model in use" in capsys.readouterr().err
