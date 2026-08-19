@@ -24,8 +24,10 @@ reporting "fully local — no document text leaves this machine"**.
 Locality is not a property of a model name. `huggingface/bge-small` is local
 when `HF_API_BASE` points at your own server and a third-party upload when it
 does not, and litellm decides which at call time. sift now asks that question
-per model instead of matching a prefix, and `sift doctor` tells self-hosters
-which variable to set to get "local" back.
+per model instead of matching a prefix. If you run Hugging Face against your own
+server, set `HF_API_BASE` (or `HUGGINGFACE_API_BASE`) and sift counts it as
+local again — that is a behaviour change for you, and closing the leak is what
+forced it.
 
 The other four prefixes on that list were re-checked the same way — by running
 each one with the network blocked and watching where the request went.
