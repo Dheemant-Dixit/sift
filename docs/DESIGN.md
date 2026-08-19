@@ -307,6 +307,19 @@ than warning once overall, because a run that embeds with one provider and
 answers with another has to mention both; a single latch named whichever came
 first and let the second one take the text in silence.
 
+**The one background request, and why it is off.** litellm downloads a public
+price list of known models from `raw.githubusercontent.com` when it is imported.
+That request carries nothing about you, but it is still a request, and the
+README invites people to verify with `lsof -i` that a default run opens no
+connection except Ollama on `localhost`. So sift sets
+`LITELLM_LOCAL_MODEL_COST_MAP` and uses the copy shipped inside the package.
+sift does no cost accounting and never reads that list.
+
+It is set in `sift_downloads/__init__.py` and has to stay there. `import litellm`
+sits above the config import inside `index.py`, and a package's `__init__` always
+runs first — set anywhere else it is too late, the request goes out, and the only
+symptom is that a claim in the README quietly stops being true.
+
 ---
 
 ## Calibrating the relevance bar
