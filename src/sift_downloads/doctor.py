@@ -15,6 +15,7 @@ import json
 import platform
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sift_downloads.config import ConfigError, Settings, get_settings
@@ -74,19 +75,25 @@ def _model_present(installed: list[str], model: str) -> bool:
 OLLAMA_PREFIXES = ("ollama/", "ollama_chat/")
 
 
-def check_models(settings: Settings) -> list[Check]:
-    """Is the machinery behind the configured models actually available?
+def check_models(settings: Settings, models: Sequence[str] | None = None) -> list[Check]:
+    """Is the machinery behind these models actually available?
 
-    Every configured model gets a line, including the ones sift cannot check.
-    Two reasons. A model with no line at all reads as fine, and this is the
-    report someone runs precisely when nothing works. And an unchecked model is
-    a real caveat: doctor said `[ok]` for an LM Studio setup and then `sift
-    index` dumped the litellm traceback this module exists to prevent.
+    Every model gets a line, including the ones sift cannot check. Two reasons.
+    A model with no line at all reads as fine, and this is the report someone
+    runs precisely when nothing works. And an unchecked model is a real caveat:
+    doctor said `[ok]` for an LM Studio setup and then `sift index` dumped the
+    litellm traceback this module exists to prevent.
+
+    `models` defaults to both, which is what `sift doctor` wants — a report on
+    the whole setup. `preflight` passes the ones the command will actually call:
+    checking both refused `sift index` with "ollama pull llama3.1:8b", telling
+    the user to download a chat model that indexing never loads.
 
     What this must never do is claim a model is local or non-local. That is
-    check_privacy's question and it owns the tuple that answers it.
+    check_privacy's question and it owns the tables that answer it.
     """
-    models = (settings.embed_model, settings.chat_model)
+    if models is None:
+        models = (settings.embed_model, settings.chat_model)
     ollama_models = [m for m in models if m.startswith(OLLAMA_PREFIXES)]
     unchecked = [
         Check(f"model {m}", OK, "not checked — sift can only verify Ollama models")
@@ -156,11 +163,16 @@ def check_index(settings: Settings) -> Check:
     return Check("index", OK, f"{len(store)} chunks, {size_mb:.1f}MB in {settings.data_dir}")
 
 
-def check_privacy(settings: Settings) -> Check:
-    """Say plainly whether anything leaves the machine."""
-    if not settings.uses_cloud():
+def check_privacy(settings: Settings, models: Sequence[str] | None = None) -> Check:
+    """Say plainly whether anything leaves the machine.
+
+    `models` defaults to both, because `sift doctor` reports on the setup rather
+    than on one command. `preflight` narrows it to what the command will call.
+    """
+    cloud = settings.cloud_models(models)
+    if not cloud:
         return Check("privacy", OK, "fully local — no document text leaves this machine")
-    models = ", ".join(settings.cloud_models())
+    models = ", ".join(cloud)
     if settings.allow_cloud:
         return Check("privacy", WARN,
                      f"cloud models in use ({models}) — "
@@ -177,16 +189,29 @@ def run_checks(settings: Settings | None = None, include_index: bool = True) -> 
     return checks
 
 
-def preflight(settings: Settings | None = None, need_models: bool = True) -> None:
+def preflight(settings: Settings | None = None, *,
+              models: Sequence[str], require_models: bool = True) -> None:
     """Raise a clean, actionable error before doing real work.
 
     Deliberately narrow: it only raises on things that WILL break the command
     about to run. Warnings are left for `sift doctor` to report.
+
+    `models` names the models this command may call, and is required. There is
+    no honest default. The version that assumed both refused `sift index` over
+    the chat model — twice, once for consent and once because it was not pulled
+    — for a command that never loads it. A default would let the next command
+    inherit that silently, so every caller has to say what it uses.
+
+    `require_models` is the other question and stays separate. `find` and the UI
+    may call the embed model and are still worth starting with the server down:
+    matching filenames needs no model, and the failure is better reported per
+    query than as a refusal to launch. That is availability. `models` is about
+    where the text goes, and applies either way.
     """
     settings = settings or get_settings()
-    checks = [check_source(settings), check_privacy(settings)]
-    if need_models:
-        checks += check_models(settings)
+    checks = [check_source(settings), check_privacy(settings, models)]
+    if require_models:
+        checks += check_models(settings, models)
 
     for check in checks:
         if check.failed:

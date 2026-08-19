@@ -110,8 +110,10 @@ def prepare(question: str, top_k: int | None = None, min_score: float | None = N
                      f"closest was {best['filename']} at {best['score']:.2f})")
         return [], Answer(text=text, chunks=[], refused=True, best_near_miss=best)
 
-    check_cloud_consent(settings)
-    warn_if_cloud(settings)
+    # The chat model only. The query was already embedded by `search` above,
+    # which gated on the embed model at the point it sent it.
+    check_cloud_consent(settings, (settings.chat_model,))
+    warn_if_cloud(settings, (settings.chat_model,))
     return chunks, None
 
 

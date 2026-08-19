@@ -181,6 +181,12 @@ The two models are separate settings. You can keep embeddings local, so your
 whole folder stays home, and use a cloud model only to write the final answer
 from the few passages retrieved.
 
+Permission is asked per command, for the models that command actually calls.
+`sift index` and `sift find` only ever use the embedding model, so a local
+embedder plus a cloud chat model indexes and searches with no `--allow-cloud`
+at all; `sift ask` is where the question is put to the cloud model, so that is
+where it asks. The warning follows the same rule, and names each provider once.
+
 **Running a model server yourself?** `ollama/` and `lm_studio/` always count as
 local — they only ever reach a server you chose. `huggingface/` is different:
 litellm sends it to `router.huggingface.co` unless you point it somewhere, so

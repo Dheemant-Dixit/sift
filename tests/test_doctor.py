@@ -28,6 +28,12 @@ from sift_downloads.doctor import (
 )
 
 
+def both() -> tuple[str, str]:
+    """Both configured models — what a command that embeds and answers passes."""
+    s = get_settings()
+    return (s.embed_model, s.chat_model)
+
+
 @pytest.fixture
 def ollama(monkeypatch):
     """Control what Ollama appears to have installed. None = not running."""
@@ -125,7 +131,7 @@ def test_an_lm_studio_setup_is_not_pushed_through_the_ollama_check(ollama, make_
     configure(embed_model="lm_studio/bge-small", chat_model="lm_studio/llama-3.1-8b")
 
     assert not any(c.failed for c in check_models(get_settings()))
-    preflight(get_settings())    # raises ConfigError under the naive fix
+    preflight(get_settings(), models=both())    # raises ConfigError under the naive fix
 
 
 def test_doctor_does_not_promise_local_for_a_default_huggingface_setup(ollama, make_file):
@@ -260,14 +266,14 @@ def test_run_checks_can_skip_the_index(ollama, make_file):
 
 def test_preflight_passes_when_everything_is_fine(ollama, make_file):
     make_file("a.md", "x")
-    preflight(get_settings())          # must not raise
+    preflight(get_settings(), models=both())          # must not raise
 
 
 def test_preflight_raises_an_actionable_error_when_ollama_is_down(ollama, make_file):
     make_file("a.md", "x")
     ollama["models"] = None
     with pytest.raises(ConfigError) as e:
-        preflight(get_settings())
+        preflight(get_settings(), models=both())
     assert "Try:" in str(e.value) and "sift doctor" in str(e.value)
 
 
@@ -275,19 +281,81 @@ def test_preflight_can_skip_the_model_check(ollama, make_file):
     """`find` matches filenames, which needs no model at all."""
     make_file("a.md", "x")
     ollama["models"] = None
-    preflight(get_settings(), need_models=False)   # must not raise
+    preflight(get_settings(), models=both(), require_models=False)   # must not raise
 
 
 def test_preflight_ignores_warnings(ollama, source_dir):
     """An empty folder is a warning, not a reason to refuse to run."""
-    preflight(get_settings())          # must not raise
+    preflight(get_settings(), models=both())          # must not raise
+
+
+# --- preflight is scoped to the models the command will actually call -------
+#
+# It used to check both, always. So `sift index` with Ollama for vectors and
+# Claude for answers — a sensible split — could not index at all, and was
+# refused twice over: once for consent, and once because the chat model was not
+# pulled. Neither is loaded by indexing.
+
+def test_indexing_is_not_refused_over_a_chat_model_it_never_calls(ollama, make_file):
+    """The finding. Indexing sends nothing to the chat provider."""
+    make_file("a.md", "x")
+    configure(chat_model="anthropic/claude-sonnet-4-5", allow_cloud=False)
+    preflight(get_settings(), models=(get_settings().embed_model,))   # must not raise
+
+
+def test_indexing_is_not_blocked_by_an_unpulled_chat_model(ollama, make_file):
+    """The same defect wearing its other face, and the crueller one.
+
+    Consent at least printed the workaround. This one told the user to download
+    an 8GB model before they were allowed to index a folder that never loads it.
+    """
+    make_file("a.md", "x")
+    ollama["models"] = ["nomic-embed-text:latest"]            # chat model absent
+    preflight(get_settings(), models=(get_settings().embed_model,))   # must not raise
+
+
+def test_answering_is_still_refused_over_a_cloud_chat_model(ollama, make_file):
+    """The property scoping must not cost. `ask` does call the chat model."""
+    make_file("a.md", "x")
+    configure(chat_model="anthropic/claude-sonnet-4-5", allow_cloud=False)
+    with pytest.raises(ConfigError, match="without consent"):
+        preflight(get_settings(), models=both())
+
+
+def test_doctor_still_reports_a_cloud_model_no_command_is_running(ollama, make_file):
+    """A report is not a gate, and narrowing both together is the wrong fix.
+
+    `sift doctor` answers "what is my setup", not "what will this command do".
+    Scoping it the same way would drop the cloud chat model from the privacy
+    line whenever doctor happened to be asked about indexing — quietly removing
+    the one place the user can see the whole picture.
+    """
+    make_file("a.md", "x")
+    configure(chat_model="anthropic/claude-sonnet-4-5", allow_cloud=True)
+
+    privacy = next(c for c in run_checks(get_settings(), include_index=False)
+                   if c.name == "privacy")
+
+    assert "anthropic/claude-sonnet-4-5" in privacy.detail
+
+
+def test_preflight_has_no_default_for_the_models_a_command_uses(ollama, make_file):
+    """`models` is required on purpose.
+
+    A default of "both" is what the bug was. A default of "none" is worse — it
+    would skip the consent gate for any caller that forgot. Both defaults are
+    wrong in a way nobody would notice, so there is no default.
+    """
+    make_file("a.md", "x")
+    with pytest.raises(TypeError):
+        preflight(get_settings())
 
 
 def test_preflight_blocks_an_unconsented_cloud_model(ollama, make_file):
     make_file("a.md", "x")
     configure(chat_model="anthropic/claude-sonnet-4-5", allow_cloud=False)
     with pytest.raises(ConfigError, match="without consent"):
-        preflight(get_settings(), need_models=False)
+        preflight(get_settings(), models=both(), require_models=False)
 
 
 # --- the Ollama probe itself -----------------------------------------------

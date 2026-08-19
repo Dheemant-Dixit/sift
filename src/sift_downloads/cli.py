@@ -26,7 +26,9 @@ def cmd_find(args) -> int:
     from sift_downloads.open_file import open_file, reveal_file
 
     settings = get_settings()
-    preflight(settings, need_models=False)  # filename matching works without a model
+    # Embed model only: `find` never generates. require_models=False because
+    # filename matching works with no model server at all.
+    preflight(settings, models=(settings.embed_model,), require_models=False)
 
     if not args.no_sync:
         _quiet_sync(settings)
@@ -66,7 +68,7 @@ def cmd_ask(args) -> int:
     from sift_downloads.generate import answer
 
     settings = get_settings()
-    preflight(settings)
+    preflight(settings, models=(settings.embed_model, settings.chat_model))
     if not args.no_sync:
         _quiet_sync(settings)
 
@@ -100,7 +102,7 @@ def cmd_index(args) -> int:
     from sift_downloads.index import Manifest, rebuild_index, update_index
 
     settings = get_settings()
-    preflight(settings)
+    preflight(settings, models=(settings.embed_model,))   # indexing never generates
 
     logging.getLogger("sift_downloads").setLevel(logging.INFO)
     if args.rebuild:
@@ -150,7 +152,7 @@ def cmd_unlock(args) -> int:
     from sift_downloads.ingest import REASON_LOCKED
 
     settings = get_settings()
-    preflight(settings)
+    preflight(settings, models=(settings.embed_model,))   # unlock re-embeds one file
     manifest = Manifest.load(settings=settings)
 
     if args.files:
@@ -217,7 +219,7 @@ def cmd_watch(args) -> int:
     from sift_downloads.watch import watch
 
     settings = get_settings()
-    preflight(settings)
+    preflight(settings, models=(settings.embed_model,))   # watch only ever syncs
     logging.getLogger("sift_downloads").setLevel(logging.INFO)
     watch(settings)
     return 0
@@ -302,7 +304,7 @@ def cmd_search(args) -> int:
     from sift_downloads.retrieve import search
 
     settings = get_settings()
-    preflight(settings)
+    preflight(settings, models=(settings.embed_model,))  # raw chunk hits, no answer
     hits = search(args.query, top_k=args.top_k, settings=settings)
     if not hits:
         print("No chunks in the index. Run: sift index")
@@ -321,10 +323,12 @@ def cmd_ui(args) -> int:
     from sift_downloads.ui import run
 
     settings = get_settings()
-    # need_models=False: the session is still useful with Ollama down — finding
-    # files by name needs no model at all, and the failure is reported per-query
+    # The session can do both, so both are named for the consent gate.
+    # require_models=False: it is still useful with Ollama down — finding files
+    # by name needs no model at all, and the failure is reported per-query
     # rather than refusing to start.
-    preflight(settings, need_models=False)
+    preflight(settings, models=(settings.embed_model, settings.chat_model),
+              require_models=False)
     return run(settings)
 
 

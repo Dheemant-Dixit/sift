@@ -147,6 +147,51 @@ def test_cloud_model_allowed_with_explicit_consent():
     config.check_cloud_consent(settings)  # must not raise
 
 
+# --- the gate is scoped to the models an operation will actually call ------
+
+def test_the_consent_gate_only_weighs_the_models_it_is_given():
+    settings = configure(embed_model="ollama/nomic-embed-text",
+                         chat_model="anthropic/claude-sonnet-4-5", allow_cloud=False)
+    config.check_cloud_consent(settings, (settings.embed_model,))   # must not raise
+    with pytest.raises(ConfigError, match="without consent"):
+        config.check_cloud_consent(settings, (settings.chat_model,))
+
+
+def test_the_default_is_still_the_whole_configuration():
+    """Reports want the wide answer; only gates should narrow it."""
+    settings = configure(chat_model="anthropic/claude-sonnet-4-5", allow_cloud=True)
+    assert settings.uses_cloud() is True
+    assert settings.cloud_models() == ["anthropic/claude-sonnet-4-5"]
+
+
+def test_every_cloud_model_announces_itself_once(monkeypatch, capsys):
+    """The latch is a set, not a bool, and that is not tidiness.
+
+    Once the warning is raised per operation, a run that embeds with one cloud
+    provider and answers with another raises it twice. A single bool latch
+    names whichever came first and lets the second provider take the document
+    text in silence — a disclosure bug created by fixing the gate.
+    """
+    monkeypatch.setattr(config, "_cloud_warned", set())
+    settings = configure(embed_model="openai/text-embedding-3-small",
+                         chat_model="anthropic/claude-sonnet-4-5", allow_cloud=True)
+
+    config.warn_if_cloud(settings, (settings.embed_model,))
+    config.warn_if_cloud(settings, (settings.chat_model,))
+    config.warn_if_cloud(settings, (settings.embed_model,))     # already announced
+
+    err = capsys.readouterr().err
+    assert err.count("cloud model in use") == 2, "each provider announces itself once"
+    assert "openai/text-embedding-3-small" in err
+    assert "anthropic/claude-sonnet-4-5" in err
+
+
+def test_a_local_model_announces_nothing():
+    """The false alarm the old warning gave on every `sift index`."""
+    settings = configure(chat_model="anthropic/claude-sonnet-4-5", allow_cloud=True)
+    config.warn_if_cloud(settings, (settings.embed_model,))     # local — silence
+
+
 # --- huggingface: local or not depending on where it is pointed ------------
 #
 # These pin a fix whose two obvious alternatives are both wrong. Dropping the
