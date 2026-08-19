@@ -181,6 +181,12 @@ The two models are separate settings. You can keep embeddings local, so your
 whole folder stays home, and use a cloud model only to write the final answer
 from the few passages retrieved.
 
+**Running a model server yourself?** `ollama/` and `lm_studio/` always count as
+local — they only ever reach a server you chose. `huggingface/` is different:
+litellm sends it to `router.huggingface.co` unless you point it somewhere, so
+sift treats it as a cloud model until you set `HF_API_BASE` (or
+`HUGGINGFACE_API_BASE`) to your own endpoint.
+
 ---
 
 ## Settings

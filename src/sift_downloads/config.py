@@ -55,10 +55,59 @@ DIST_NAME = "sift-downloads"
 # can still locate those files by name, see find.py.
 DEFAULT_EXTENSIONS = frozenset({".pdf", ".md", ".txt", ".docx"})
 
-# Model strings that are NOT local. Anything matching one of these prefixes
-# sends your document text off the machine, so it needs an explicit opt-in.
-# (This is a prefix check on the litellm model string, e.g. "anthropic/claude-…".)
-LOCAL_MODEL_PREFIXES = ("ollama/", "ollama_chat/", "huggingface/", "local/", "lm_studio/")
+# Model prefixes whose traffic stays on this machine. Everything NOT matching
+# one of these is a cloud model: it would send your document text to a third
+# party, so it needs an explicit opt-in. (A prefix check on the litellm model
+# string, e.g. "anthropic/claude-…".)
+#
+# Membership answers exactly one question: with no extra configuration, where
+# does litellm send the request? Checked by running each one, not by reading:
+#
+#   ollama/, ollama_chat/  -> http://localhost:11434
+#   lm_studio/             -> nowhere. Raises "Missing API Base" until you set
+#                             LM_STUDIO_API_BASE yourself, so sift never picks
+#                             the destination.
+#   local/                 -> nowhere. Not a litellm provider at all.
+#
+# `huggingface/` was on this list and does not belong here unconditionally,
+# which is the whole reason the list is now two tables. See below.
+LOCAL_MODEL_PREFIXES = ("ollama/", "ollama_chat/", "local/", "lm_studio/")
+
+# Prefixes that reach a third party UNLESS the user supplies a base URL, mapped
+# to the environment variables litellm reads for it (in the order it reads
+# them). For these, locality cannot be read off the model string at all.
+#
+# litellm's huggingface provider falls back to https://router.huggingface.co
+# when no api_base is set, and sift sets none — `index.py` calls
+# `litellm.embedding(model=..., input=batch)` bare. So `huggingface/` on the
+# plain local list meant a folder of bank statements was POSTed to Hugging Face
+# while `uses_cloud()` returned False: no consent gate, no warning, and `sift
+# doctor` printing "fully local — no document text leaves this machine".
+SELF_HOSTABLE_PREFIXES = {
+    "huggingface/": ("HF_API_BASE", "HUGGINGFACE_API_BASE"),
+}
+
+
+def model_is_local(model: str) -> bool:
+    """Would this model keep the text on this machine?
+
+    Deliberately a function and not a prefix tuple. For some providers the
+    answer is not a property of the model string: `huggingface/bge-small` is
+    local with HF_API_BASE set and a third-party upload without it, and litellm
+    decides that at call time. A tuple cannot express that, and the version
+    that tried leaked every document in the folder.
+
+    The environment is read here rather than frozen into Settings for the same
+    reason every other knob is read late — see this module's docstring.
+
+    An env var set to the empty string counts as unset, so a half-configured
+    setup is treated as cloud and hits the consent gate. Wrong in the safe
+    direction: the cost is one unnecessary --allow-cloud, not a silent upload.
+    """
+    for prefix, env_vars in SELF_HOSTABLE_PREFIXES.items():
+        if model.startswith(prefix):
+            return any(os.environ.get(var) for var in env_vars)
+    return model.startswith(LOCAL_MODEL_PREFIXES)
 
 
 # ---------------------------------------------------------------------------
@@ -229,14 +278,14 @@ class Settings:
     def uses_cloud(self) -> bool:
         """True if either configured model would send text off this machine."""
         return any(
-            not m.startswith(LOCAL_MODEL_PREFIXES)
+            not model_is_local(m)
             for m in (self.embed_model, self.chat_model)
         )
 
     def cloud_models(self) -> list[str]:
         return [
             m for m in (self.embed_model, self.chat_model)
-            if not m.startswith(LOCAL_MODEL_PREFIXES)
+            if not model_is_local(m)
         ]
 
 
@@ -471,9 +520,31 @@ def check_cloud_consent(settings: Settings | None = None) -> None:
     raise ConfigError(
         f"Refusing to use a non-local model without consent: {models}\n"
         f"  This would send the text of your documents to that provider.\n"
+        f"{_self_hosting_hint(settings.cloud_models())}"
         f"  If that is what you want, re-run with --allow-cloud (or set "
         f"SIFT_ALLOW_CLOUD=1)."
     )
+
+
+def _self_hosting_hint(models: list[str]) -> str:
+    """Name the variable that would make a self-hosted setup count as local.
+
+    Only providers in SELF_HOSTABLE_PREFIXES have one. For `anthropic/` there
+    is no base URL that keeps the text here, so offering one would be a lie —
+    which is why this reads the same table `model_is_local` does rather than
+    guessing from the model string.
+
+    This exists because closing the huggingface leak changed behaviour for the
+    people running it against their own server: they were silently counted as
+    local and now hit this gate. Telling them which knob restores that is the
+    difference between a fix and a regression.
+    """
+    for model in models:
+        for prefix, env_vars in SELF_HOSTABLE_PREFIXES.items():
+            if model.startswith(prefix):
+                return (f"  Running {prefix.rstrip('/')} on your own server? Set "
+                        f"{env_vars[0]} and sift will count it as local.\n")
+    return ""
 
 
 _cloud_warned = False

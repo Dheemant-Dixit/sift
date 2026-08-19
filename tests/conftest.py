@@ -39,6 +39,13 @@ def isolated_settings(tmp_path, monkeypatch):
     for key in [k for k in os.environ if k.startswith("SIFT_")]:
         monkeypatch.delenv(key, raising=False)
 
+    # Not SIFT_* and still ours: `config.model_is_local` reads these to decide
+    # whether a self-hostable provider points at this machine. A developer with
+    # HF_API_BASE exported would otherwise flip the cloud-gate tests, and — as
+    # above — the test would not fail, it would quietly assert the opposite.
+    for key in ("HF_API_BASE", "HUGGINGFACE_API_BASE", "LM_STUDIO_API_BASE"):
+        monkeypatch.delenv(key, raising=False)
+
     source = tmp_path / "downloads"
     source.mkdir()
     data = tmp_path / "data"

@@ -147,6 +147,86 @@ def test_cloud_model_allowed_with_explicit_consent():
     config.check_cloud_consent(settings)  # must not raise
 
 
+# --- huggingface: local or not depending on where it is pointed ------------
+#
+# These pin a fix whose two obvious alternatives are both wrong. Dropping the
+# entry from the tuple breaks the self-hosting user; dropping every non-Ollama
+# entry tells lm_studio/ and local/ users their documents are being uploaded,
+# which is false. There is a test below for each.
+
+def test_huggingface_without_a_base_url_is_a_cloud_model():
+    """It sat on the local list for eleven PRs and it was never local.
+
+    litellm falls back to https://router.huggingface.co when no api_base is
+    set and sift sets none, so every chunk of every document was POSTed to a
+    third party while `uses_cloud()` returned False — no gate, no warning, and
+    doctor reporting "fully local".
+    """
+    settings = configure(embed_model="huggingface/BAAI/bge-small-en-v1.5")
+    assert settings.uses_cloud()
+    assert settings.cloud_models() == ["huggingface/BAAI/bge-small-en-v1.5"]
+    with pytest.raises(ConfigError, match="--allow-cloud"):
+        config.check_cloud_consent(settings)
+
+
+@pytest.mark.parametrize("var", ["HF_API_BASE", "HUGGINGFACE_API_BASE"])
+def test_a_self_hosted_huggingface_model_is_still_local(monkeypatch, var):
+    """The tempting one-line fix — delete the entry — is wrong.
+
+    Someone running huggingface/ against their own server is genuinely local,
+    and would suddenly need --allow-cloud to index their own folder, with sift
+    telling them their documents are leaving the machine. They are not.
+
+    Both names, because litellm reads both and honouring only the first would
+    call a local setup cloud.
+    """
+    monkeypatch.setenv(var, "http://localhost:8080")
+    settings = configure(embed_model="huggingface/BAAI/bge-small-en-v1.5")
+    assert not settings.uses_cloud()
+    config.check_cloud_consent(settings)  # must not raise
+
+
+def test_an_empty_base_url_does_not_count_as_configured(monkeypatch):
+    """Wrong in the safe direction: an unnecessary --allow-cloud, never a
+    silent upload. litellm's embedding path tests membership rather than
+    truthiness, so `HF_API_BASE=` reaches it as an empty URL and breaks —
+    loudly, which is the acceptable half of being wrong here."""
+    monkeypatch.setenv("HF_API_BASE", "")
+    assert configure(embed_model="huggingface/BAAI/bge-small-en-v1.5").uses_cloud()
+
+
+@pytest.mark.parametrize("model", ["lm_studio/bge-small", "local/whatever"])
+def test_a_provider_that_cannot_reach_a_third_party_is_not_called_cloud(model):
+    """The over-correction: "only Ollama is provably local, drop the rest."
+
+    Audited by running each one with the network blocked. `lm_studio/` raises
+    "Missing API Base" and `local/` is not a litellm provider at all, so
+    neither sends anything anywhere. Telling those users this "would send the
+    text of your documents to that provider" swaps one false statement about
+    privacy for another.
+    """
+    settings = configure(embed_model=model)
+    assert not settings.uses_cloud()
+    config.check_cloud_consent(settings)  # must not raise
+
+
+def test_the_refusal_names_the_variable_that_would_make_it_local():
+    """Closing the leak is a behaviour change for self-hosting users. The
+    error is where they find out which knob restores what they had."""
+    settings = configure(embed_model="huggingface/BAAI/bge-small-en-v1.5")
+    with pytest.raises(ConfigError, match="HF_API_BASE"):
+        config.check_cloud_consent(settings)
+
+
+def test_a_provider_with_no_local_option_is_not_offered_one():
+    """There is no base URL that keeps text out of Anthropic, so suggesting
+    one would be a lie. The hint reads the same table the check does."""
+    settings = configure(chat_model="anthropic/claude-sonnet-4-5")
+    with pytest.raises(ConfigError) as excinfo:
+        config.check_cloud_consent(settings)
+    assert "API_BASE" not in str(excinfo.value)
+
+
 def test_negative_overlap_is_rejected():
     """Bounded from above already; unbounded below, `chunk_text` advances past
     each window and the gap between them is never indexed — no error, no log."""
