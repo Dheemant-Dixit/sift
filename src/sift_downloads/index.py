@@ -42,6 +42,7 @@ from sift_downloads.config import (
     check_cloud_consent,
     get_settings,
     invalidate_store_cache,
+    warn_if_cloud,
 )
 from sift_downloads.ingest import REASON_LOCKED, file_fingerprint, load_document, scan_source
 from sift_downloads.store import IndexedChunk, IndexFormatMismatch, VectorStore, normalize
@@ -64,9 +65,15 @@ def embed_texts(texts: list[str], settings: Settings | None = None,
 
     A caller-supplied `embedder=` bypasses this deliberately: that is the
     caller's own code, so sift is not the one sending anything.
+
+    The reminder goes here for the same reason the check does, and it has to be
+    both: consent is a decision made once, disclosure is what tells you it is
+    being acted on now. Warning only from `generate` meant asking one question
+    announced itself while indexing the whole folder did not.
     """
     settings = settings or get_settings()
     check_cloud_consent(settings)
+    warn_if_cloud(settings)
     vectors: list[list[float]] = []
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
