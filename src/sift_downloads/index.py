@@ -72,8 +72,10 @@ def embed_texts(texts: list[str], settings: Settings | None = None,
     announced itself while indexing the whole folder did not.
     """
     settings = settings or get_settings()
-    check_cloud_consent(settings)
-    warn_if_cloud(settings)
+    # The embed model, and only the embed model: this function is where document
+    # text and query text are sent, and neither reaches the chat model from here.
+    check_cloud_consent(settings, (settings.embed_model,))
+    warn_if_cloud(settings, (settings.embed_model,))
     vectors: list[list[float]] = []
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]

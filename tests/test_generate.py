@@ -174,6 +174,20 @@ def test_a_cloud_model_with_consent_is_allowed(retrieved, spy_model):
     assert not answer("q").refused
 
 
+def test_answering_is_not_refused_over_the_embedding_model(retrieved, spy_model):
+    """The same finding from the other end.
+
+    `prepare` gates the chat model. The query was already embedded by `search`,
+    which gated on the embed model at the point it sent it — so weighing the
+    embed model again here refuses an answer over text that has already gone,
+    with a local chat model that sends nothing.
+    """
+    configure(embed_model="openai/text-embedding-3-small",
+              chat_model="ollama_chat/llama3.1:8b", allow_cloud=False)
+    retrieved["chunks"] = [chunk(score=0.9)]
+    assert not answer("q").refused
+
+
 def test_consent_is_not_checked_when_the_answer_is_refused_anyway(retrieved, no_model):
     """A refusal sends nothing, so it must not be blocked by a consent error."""
     configure(chat_model="anthropic/claude-sonnet-4-5", allow_cloud=False)

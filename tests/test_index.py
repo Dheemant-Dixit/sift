@@ -419,6 +419,29 @@ def test_a_default_huggingface_model_is_refused_before_anything_is_sent():
         embed_texts(["net pay 4,812.00, account ending 4471"])
 
 
+def test_embedding_is_not_refused_over_the_chat_model(monkeypatch):
+    """The library path, which never sees preflight.
+
+    Fixing this at the CLI alone leaves `update_index()` from Python refusing
+    to embed with a local model because a cloud chat model is configured
+    somewhere it will never be read.
+
+    Reaching litellm is the pass condition here: it means the gate let the call
+    through, which is exactly what `no_model_server` is there to make visible.
+    """
+    configure(embed_model="ollama/nomic-embed-text",
+              chat_model="anthropic/claude-sonnet-4-5", allow_cloud=False)
+    with pytest.raises(AssertionError, match="reached litellm"):
+        embed_texts(["closing balance 5,102.44 on 31 March"])
+
+
+def test_embedding_is_still_refused_over_the_embed_model(monkeypatch):
+    """And the half that must not move: this call does send text."""
+    configure(embed_model="openai/text-embedding-3-small", allow_cloud=False)
+    with pytest.raises(ConfigError, match="--allow-cloud"):
+        embed_texts(["closing balance 5,102.44 on 31 March"])
+
+
 def test_embedding_nothing_makes_no_request(monkeypatch):
     import litellm
 
@@ -669,7 +692,7 @@ def test_indexing_the_folder_announces_the_cloud_model(make_file, monkeypatch, c
 
     from sift_downloads import config
 
-    monkeypatch.setattr(config, "_cloud_warned", False)  # a process-lifetime latch
+    monkeypatch.setattr(config, "_cloud_warned", set())  # a process-lifetime latch
     monkeypatch.setattr(litellm, "embedding", lambda model, input, **kw: SimpleNamespace(
         data=[{"index": i, "embedding": [0.1, 0.2, 0.3]} for i in range(len(input))]))
     make_file("statement.txt", "closing balance 5,102.44 on 31 March")

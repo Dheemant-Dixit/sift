@@ -32,6 +32,7 @@ import os
 import platform
 import shlex
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -275,18 +276,26 @@ class Settings:
     def max_file_bytes(self) -> int:
         return self.max_file_mb * 1024 * 1024
 
-    def uses_cloud(self) -> bool:
-        """True if either configured model would send text off this machine."""
-        return any(
-            not model_is_local(m)
-            for m in (self.embed_model, self.chat_model)
-        )
+    def uses_cloud(self, models: Sequence[str] | None = None) -> bool:
+        """True if any of these models would send text off this machine."""
+        return bool(self.cloud_models(models))
 
-    def cloud_models(self) -> list[str]:
-        return [
-            m for m in (self.embed_model, self.chat_model)
-            if not model_is_local(m)
-        ]
+    def cloud_models(self, models: Sequence[str] | None = None) -> list[str]:
+        """Which of `models` are not local? Defaults to both configured models.
+
+        The default answers "is this configuration cloudy?", which is the right
+        question for a *report* — `sift status` and `sift doctor` should name a
+        cloud model whether or not the command in front of them will call it.
+
+        A *gate* needs the other question: "will this operation send text to a
+        third party?" — and must pass the models it is about to call. Asking the
+        configuration-wide question refused `sift index` over a chat model
+        indexing never touches, so a local embedder plus a cloud chat model
+        could not index at all without --allow-cloud.
+        """
+        if models is None:
+            models = (self.embed_model, self.chat_model)
+        return [m for m in models if not model_is_local(m)]
 
 
 class ConfigError(Exception):
@@ -506,21 +515,27 @@ def require_source_dir(settings: Settings | None = None) -> Path:
     raise ConfigError(f"Source path is not a folder: {source}\n  {hint}")
 
 
-def check_cloud_consent(settings: Settings | None = None) -> None:
+def check_cloud_consent(settings: Settings | None = None,
+                        models: Sequence[str] | None = None) -> None:
     """Refuse to send document text to a cloud provider without explicit consent.
 
     A cloud model string alone is NOT consent. Your Downloads folder holds bank
     statements, ID scans and contracts; shipping that to a third party should be
     a decision, not a side effect of editing a model name.
+
+    `models` names the models the operation about to run will actually call.
+    Pass it. The default is both configured models, which is a fine answer for a
+    report and the wrong one for a gate: consent is about text leaving, and a
+    model that is never called sends nothing.
     """
     settings = settings or get_settings()
-    if not settings.uses_cloud() or settings.allow_cloud:
+    cloud = settings.cloud_models(models)
+    if not cloud or settings.allow_cloud:
         return
-    models = ", ".join(settings.cloud_models())
     raise ConfigError(
-        f"Refusing to use a non-local model without consent: {models}\n"
+        f"Refusing to use a non-local model without consent: {', '.join(cloud)}\n"
         f"  This would send the text of your documents to that provider.\n"
-        f"{_self_hosting_hint(settings.cloud_models())}"
+        f"{_self_hosting_hint(cloud)}"
         f"  If that is what you want, re-run with --allow-cloud (or set "
         f"SIFT_ALLOW_CLOUD=1)."
     )
@@ -547,18 +562,30 @@ def _self_hosting_hint(models: list[str]) -> str:
     return ""
 
 
-_cloud_warned = False
+# Which cloud models have already announced themselves this process. A set and
+# not a bool: the warning is now raised per operation, so a run that embeds with
+# one cloud provider and answers with another must announce both. A single latch
+# named whichever came first and let the second one leave silently.
+_cloud_warned: set[str] = set()
 
 
-def warn_if_cloud(settings: Settings | None = None) -> None:
-    """Print a one-time reminder when consent has been given and cloud is in use."""
-    global _cloud_warned
+def warn_if_cloud(settings: Settings | None = None,
+                  models: Sequence[str] | None = None) -> None:
+    """Print a one-time reminder when consent has been given and cloud is in use.
+
+    Takes the same `models` as check_cloud_consent, and for the same reason.
+    Disclosure has to track the gate: telling you text is leaving while indexing
+    a folder that only touches a local embedder is a false alarm, and the
+    warnings people learn to ignore are the ones that fire when nothing is
+    happening.
+    """
     settings = settings or get_settings()
-    if _cloud_warned or not settings.uses_cloud():
+    unannounced = [m for m in settings.cloud_models(models) if m not in _cloud_warned]
+    if not unannounced:
         return
-    _cloud_warned = True
-    models = ", ".join(settings.cloud_models())
+    _cloud_warned.update(unannounced)
     print(
-        f"  ! cloud model in use ({models}) — document text is leaving this machine",
+        f"  ! cloud model in use ({', '.join(unannounced)}) — "
+        f"document text is leaving this machine",
         file=sys.stderr,
     )
