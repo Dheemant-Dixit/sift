@@ -276,10 +276,10 @@ def cmd_status(args) -> int:
 
 
 def cmd_doctor(args) -> int:
-    from sift_downloads.doctor import FAIL, OK, run_checks
+    from sift_downloads.doctor import FAIL, OK, WARN, run_checks
 
     settings = get_settings()
-    symbols = {OK: "ok  ", "warn": "warn", FAIL: "FAIL"}
+    symbols = {OK: "ok  ", WARN: "warn", FAIL: "FAIL"}
     worst_failed = False
     for check in run_checks(settings):
         print(f"[{symbols[check.status]}] {check.name}: {check.detail}")
@@ -454,11 +454,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_ui.set_defaults(func=cmd_ui)
 
     return parser
-
-
-# Every subcommand name, used to tell `sift find x` from `sift --source /x`.
-COMMANDS = frozenset({"find", "ask", "index", "watch", "status", "doctor",
-                      "search", "purge", "ui"})
 
 
 def with_default_command(argv: list[str], interactive: bool = True) -> list[str]:

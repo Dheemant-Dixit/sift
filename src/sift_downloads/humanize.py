@@ -19,11 +19,13 @@ MATCH_MARKER = {"content": "·", "filename": "name", "both": "·+name"}
 
 def human_size(num_bytes: int) -> str:
     size = float(num_bytes)
+    # "GB" is the last unit, so that iteration always returns and the loop has
+    # no fall-through. A petabyte prints as a large number of GB rather than
+    # running off the end.
     for unit in ("B", "KB", "MB", "GB"):
         if size < 1024 or unit == "GB":
             return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
         size /= 1024
-    return f"{size:.1f}GB"
 
 
 def human_age(timestamp: float) -> str:
