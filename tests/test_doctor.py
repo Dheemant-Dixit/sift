@@ -81,7 +81,7 @@ def test_cloud_models_skip_the_ollama_check_entirely(monkeypatch):
     configure(embed_model="openai/text-embedding-3-small",
               chat_model="anthropic/claude-sonnet-4-5")
     checks = check_models(get_settings())
-    assert len(checks) == 1 and not checks[0].failed
+    assert len(checks) == 2 and not any(c.failed for c in checks)
 
 
 def test_a_mixed_setup_still_checks_the_local_half(ollama):
@@ -89,6 +89,55 @@ def test_a_mixed_setup_still_checks_the_local_half(ollama):
     configure(chat_model="anthropic/claude-sonnet-4-5")   # embed stays local
     failed = [c for c in check_models(get_settings()) if c.failed]
     assert [c.fix for c in failed] == ["ollama pull nomic-embed-text"]
+
+
+def test_a_local_non_ollama_model_is_never_called_non_local(monkeypatch, make_file):
+    """doctor contradicted itself in two adjacent [ok] lines.
+
+    `check_models` knew two local prefixes and `check_privacy` knew five, so an
+    LM Studio setup printed "using non-local models: lm_studio/..." directly
+    above "fully local - no document text leaves this machine". The report a
+    user runs *to be told the truth about privacy* answered the question twice,
+    both ways.
+    """
+    monkeypatch.setattr(doctor, "_installed_ollama_models",
+                        lambda: pytest.fail("must not contact Ollama for an LM Studio model"))
+    make_file("a.md", "x")
+    configure(embed_model="lm_studio/bge-small", chat_model="lm_studio/llama-3.1-8b")
+
+    checks = run_checks(get_settings(), include_index=False)
+
+    privacy = next(c for c in checks if c.name == "privacy")
+    assert "fully local" in privacy.detail          # the contradicted line really ran
+    assert not any("non-local" in c.detail for c in checks)
+
+
+def test_an_lm_studio_setup_is_not_pushed_through_the_ollama_check(ollama, make_file):
+    """The tempting fix is to swap in config.LOCAL_MODEL_PREFIXES. It is wrong.
+
+    That tuple answers "is this local?", not "can sift check it?" - so an LM
+    Studio model would be looked up in Ollama's inventory, and a user who has
+    never installed Ollama would be told to install it before `sift index`
+    would run at all. Worse than the misleading line it replaces.
+    """
+    ollama["models"] = None      # no Ollama on this machine, and none wanted
+    make_file("a.md", "x")
+    configure(embed_model="lm_studio/bge-small", chat_model="lm_studio/llama-3.1-8b")
+
+    assert not any(c.failed for c in check_models(get_settings()))
+    preflight(get_settings())    # raises ConfigError under the naive fix
+
+
+def test_every_configured_model_gets_a_line(ollama):
+    """A model sift cannot check must still be named.
+
+    Silently dropping it is the other wrong fix: no line reads as "fine", and
+    this is the report someone runs precisely when nothing works.
+    """
+    configure(chat_model="anthropic/claude-sonnet-4-5")   # embed stays on Ollama
+    named = " ".join(c.name for c in check_models(get_settings()))
+    assert "ollama/nomic-embed-text" in named
+    assert "anthropic/claude-sonnet-4-5" in named
 
 
 @pytest.mark.parametrize("system, phrase", [
