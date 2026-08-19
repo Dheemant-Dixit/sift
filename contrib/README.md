@@ -11,6 +11,13 @@ an answer.
 sift does **not** install any of this for you. Copy the file, edit the paths,
 and load it yourself.
 
+**One thing to know about the resident watcher.** `sift watch` gives a running
+sync 30 seconds to finish when you press Ctrl-C. `systemctl stop` and
+`launchctl unload` send `SIGTERM`, which sift does not catch, so a sync in
+progress is dropped instead. Nothing is corrupted — the next sync re-reads
+whatever did not make it — but the work is thrown away silently. If that
+matters, stop the service when the folder is quiet.
+
 ---
 
 ## macOS (launchd)

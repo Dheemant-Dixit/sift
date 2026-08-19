@@ -2,7 +2,7 @@
 
 ```bash
 pip install -e ".[watch,dev]"
-pytest                                  # ~1.6s
+pytest                                  # 560 tests, ~3s
 pytest --cov=sift_downloads --cov-report=term-missing
 ```
 
@@ -34,14 +34,16 @@ One file per concern; sections inside marked with `# --- name ---`.
 | `test_config_platform.py` | per-OS folder resolution, including localized Linux Downloads |
 | `test_cli.py` | every subcommand through `main(argv)`, and its exit code |
 | `test_cli_unlock_status.py` | `sift unlock` (passwords) and `sift status` detail |
-| `test_doctor.py` | preflight — mostly asserting the *fix* string, not the failure |
+| `test_doctor.py` | preflight — mostly asserting the *fix* string, not the failure; which models each command declares |
 | `test_session.py` | parsing a typed line into a Request |
 | `test_ui.py` | rendering and dispatch, via an injected `Console` |
-| `test_platform.py` | `open`/`xdg-open`/`explorer` per OS; watcher debouncing |
+| `test_platform.py` | `open`/`xdg-open`/`explorer` per OS; watcher debouncing, one-sync-at-a-time, shutdown |
+| `test_small_to_big.py` | the indexed unit vs. the served window, and the document head |
+| `test_pr_template.py` | the `pr-template` check's rules, as a pure function |
 
 ## Deliberate coverage gaps
 
-Coverage is ~96%. What is left out, and why:
+Coverage is ~95%, gated at 92% on one job. What is left out, and why:
 
 - **`ui.read_line` and `ui.run`** — prompt_toolkit key bindings and the event
   loop. Testing them needs a pty, and what it would prove is that
@@ -51,10 +53,24 @@ Coverage is ~96%. What is left out, and why:
 
 Chasing these to 100% would add brittle tests, not confidence.
 
+## Two conventions worth knowing before you add a test
+
+**A test that proves an absence must first prove the path ran.** The freshness
+guard defers a just-written file as "still being written", so a sync can report
+nothing because it did nothing — not because the thing under test is broken.
+`conftest.write_file` backdates 60 seconds for exactly this. Assert the
+precondition (`stats.chunks_total > 0`) next to the absence, or the test goes
+green on an empty run.
+
+**Concurrency tests use `threading.Event` pairs, never `sleep`,** and run
+anything that could deadlock on a thread with `join(timeout=…)`. Called
+directly, a deadlock freezes pytest with no output at all — which is a test
+that detects the bug by hanging CI, and is barely a test.
+
 ## Checks worth re-running when the suite changes
 
 ```bash
-pytest -p randomly --randomly-seed=1234   # order independence
+pytest --randomly-seed=1234   # order independence
 ```
 
 The suite is order-independent by design; `pytest-randomly` shuffles on every

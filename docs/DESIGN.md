@@ -34,14 +34,17 @@ ASKING    (sift ask)
 |---|---|
 | `config.py` | Every setting, and why they are read at call time instead of import time |
 | `ingest.py` | Getting text out of pdf/docx/md/txt, surviving a real Downloads folder, and reporting *why* a file yielded nothing |
-| `chunk.py` | Splitting text with overlap, and the size/overlap tradeoff |
-| `store.py` | The vector store: vectors and text kept together, cosine search, atomic saves |
-| `index.py` | The incremental sync layer |
+| `chunk.py` | Splitting text, and why each passage is cut twice — small to match, large to read |
+| `store.py` | The vector store: vectors and text kept together, cosine search, and exactly how far "atomic" goes |
+| `index.py` | The incremental sync layer, and the batch that talks to the embedding model |
 | `retrieve.py` | Embedding the query and searching |
 | `find.py` | Turning chunk hits into ranked *files*, and why filenames get scored too |
 | `generate.py` | Keeping the model grounded in retrieved text, and the refusal guardrail |
+| `doctor.py` | The setup checks, and why a check that cannot verify something has to say so |
+| `watch.py` | Optional background syncing: debouncing, one sync at a time, and shutdown |
 | `session.py` | What the interactive session means, with no terminal involved |
 | `ui.py` | Drawing it: the inline prompt, streaming answers, result layout |
+| `humanize.py` | The formatting both front ends share, so they cannot drift apart |
 
 ---
 
@@ -80,6 +83,46 @@ and scanned the developer's real Downloads folder instead.
 
 ---
 
+## The text sift matches is not the text it reads to you
+
+One window cannot do both jobs. Matching wants it **small**, so the embedding is
+*about* one thing. Answering wants it **large**, so the model can see enough
+context to be right. A single 1000-character chunk is a compromise that is bad
+at both.
+
+So every passage is cut twice. It is **indexed** as a small unit — `child_size`,
+about 300 characters, cut on line boundaries — and **served** as the
+~1000-character window around it. A question matches something precise; the
+model reads the whole passage it came from. `store.py` keeps both strings on the
+record: `index_text` is what was embedded, `text` is what gets sent.
+
+Two limits on that, both from measured failures rather than taste.
+
+**An indexed unit has a floor** (`child_min`, 200). Cut smaller and a passage
+stops being about anything. A payslip row reading only `Bank A/C No 12345…`
+embeds as *an account number*, so a question about somebody else's bank account
+retrieves your payslip and the model answers from it. At 200 the same text
+embeds as *a payslip*, and stops matching.
+
+**Each served passage carries its document's opening line** (`doc_head_chars`,
+120). Documents name their owner once, at the top, and never again — so a clause
+lifted from page 4 cannot be attributed to anyone. Given a tax form holding both
+the employee's job title and the HR signatory's, every model tested answered
+"what is my designation?" with the *signatory's* title. With the opening line
+attached, they answer correctly.
+
+The head goes on the **served** passage only, never on the indexed child. A
+120-character header on a ~72-character child is 63% of the embedded text: every
+child in a document would collapse toward one vector and intra-document
+precision — the entire point of this split — would be destroyed.
+
+`line_blocks` cuts only on line boundaries, so a document extracted as one
+unbroken line yields child == parent and gets none of this. That is the right
+trade for forms, where cutting mid-line is exactly what separated a value from
+its key in the first place, but the benefit is genre-dependent.
+
+---
+
 ## Why the store looks the way it does
 
 The index is **one list of records**. Each record holds its own vector, its own
@@ -96,11 +139,28 @@ is no second structure to fall out of step with. The search matrix still exists,
 but it is a cache built from the records, thrown away on every change, and never
 treated as the truth.
 
-**Saving is one atomic file.** Vectors, text and provenance are written together
-to a temp file, then moved into place with `os.replace`. A crash can leave you
-with the old index or the new one, never half of each. Loading uses
-`allow_pickle=False`, so an index file can never run code, which matters if you
-ever share one.
+**Saving the store is atomic. A whole sync is not.** Vectors, text and
+provenance are written together to a temp file, then moved into place with
+`os.replace`, so a crash leaves you with the whole old index or the whole new
+one, never half of each. Loading uses `allow_pickle=False`, so an index file can
+never run code, which matters if you ever share one.
+
+That is a claim about **one write**, and a sync makes two: the store, then the
+manifest. It was read here as a claim about the whole operation for a while, so
+it is worth being exact. Killed mid-sync, sift is left in one of three states,
+and none of them is a corrupt index:
+
+| killed during | what is on disk | how it heals |
+|---|---|---|
+| embedding | nothing new written | the changed files are re-read next sync |
+| `store.save()`, between the temp write and the rename | a leftover `index.tmp.npz`, holding document text | overwritten by the next sync that saves |
+| between `store.save()` and `manifest.save()` | store updated, manifest one behind | a file with no manifest entry counts as changed |
+
+All three heal, because "no manifest entry" and "changed" are the same thing to
+the sync. The middle one is still worth knowing: nothing reports that temp file,
+and it is a second copy of your document text sitting in the data directory.
+This is why `sift watch` waits for a running sync on Ctrl-C instead of letting
+the interpreter drop it — see `watch.py`.
 
 **The provenance header** records which embedding model built the index.
 This one is subtle and worth the paragraph. Vectors made by different models are
@@ -208,6 +268,47 @@ so there is exactly one copy of this rule and the two paths cannot drift apart.
 
 ---
 
+## Where the privacy gates live
+
+A cloud model needs `--allow-cloud`. Getting that right turned out to be three
+separate decisions, and each was got wrong once first.
+
+**The gate sits where the text leaves, not at the CLI.** It used to run in
+`preflight()`, which covers every `sift` subcommand and none of the library
+entry points — `update_index()` called from Python embedded the whole folder
+with a cloud model and never asked. It now runs at the top of `embed_texts`,
+the one point both paths cross (documents via `update_index`, the question via
+`retrieve.embed_query`), and in `generate.prepare` for the chat model. A
+caller-supplied `embedder=` stays ungated on purpose: that is the caller's own
+code, and it is what lets the test suite run with no model server.
+
+**A gate asks about the operation; a report asks about the setup.** `Settings`
+knows both configured models and cannot know which command is running, so
+`uses_cloud()` and `cloud_models()` default to both. That is right for
+`sift doctor`, which describes a configuration, and wrong for a gate. Asked the
+wide question, `sift index` was refused over a chat model indexing never loads
+— so a local embedder plus a cloud chat model, the split this project
+recommends, could not index at all. Every gate is now handed the models its
+operation will actually call, and `preflight` *requires* the list: "both" is
+the bug and "none" would skip the gate silently, so there is no honest default.
+
+**Locality is not a property of the model string.** `huggingface/bge-small` is
+local when `HF_API_BASE` points at your own server and a third-party upload
+when it does not, and litellm decides which at call time. On a flat list of
+"local" prefixes it counted as local, so a folder of documents went to
+`router.huggingface.co` with no gate, no warning, and `sift doctor` reporting
+"fully local". `model_is_local()` now splits the question in two: prefixes that
+are local unconditionally, and prefixes that are local once pointed at a
+server. Membership is decided by running the provider with the network blocked
+and watching where the request goes — never by reading the name.
+
+The warning follows the gate. It names each cloud model once per process rather
+than warning once overall, because a run that embeds with one provider and
+answers with another has to mention both; a single latch named whichever came
+first and let the second one take the text in silence.
+
+---
+
 ## Calibrating the relevance bar
 
 `min_score = 0.55` was **measured**, not chosen. It was measured for
@@ -248,10 +349,17 @@ Real ones, not modesty.
   password-protected document's text into `index.npz` alongside everything else.
   The file stays protected on disk; its contents no longer are.
 - **No re-ranker.** Retrieval ranks by *topic similarity*, not by *does this
-  answer the question*. On a big folder it shows: "what is my designation?" can
-  rank a dozen employment documents above the payslip that states the answer
-  outright. A cross-encoder re-ranker scores the question and the passage
-  together and fixes exactly this.
+  answer the question*, so a document merely **about** your query can outrank
+  the one that answers it. A cross-encoder was built and measured against the
+  worst case in this folder. It did not reliably fix it, and the defect it was
+  aimed at turned out to be a chunking problem — see [the text sift
+  matches](#the-text-sift-matches-is-not-the-text-it-reads-to-you). It is not
+  shipped.
+- **Ctrl-C is the only interrupt that is handled.** `sift watch` gives a
+  running sync 30 seconds to finish on Ctrl-C. A `SIGTERM` — which is what
+  `systemctl stop` and `launchctl unload` send — is not caught, so a sync in
+  progress is dropped exactly as it used to be. Nothing is corrupted either
+  way; see the three states above.
 - **Grounding is not bulletproof.** A small local model can still drift past the
   "only use the context" instruction. The relevance bar is the part it cannot
   argue with, because it stops the call from happening.
@@ -267,15 +375,21 @@ Real ones, not modesty.
 
 ## Roadmap
 
+- OCR for scanned PDFs. The largest gap left — it is the difference between
+  finding a file and reading it.
 - Conversational follow-ups in the session — "find my lease", then "what's the
   notice period?". The session already records the turns; only the
   prompt-building needs to change.
-- A cross-encoder re-ranker as an optional second stage. Highest-value fix on
-  this list.
-- OCR for scanned PDFs.
+- Handle `SIGTERM` the way Ctrl-C is handled, so the grace period applies to
+  `sift watch` under launchd and systemd too.
 - [LanceDB](https://lancedb.com) as a drop-in backend for the store — embedded,
   on-disk, keeps vectors and metadata together behind the same `add`/`search`
   methods.
+
+**A cross-encoder re-ranker used to be top of this list.** It was built,
+measured against the failure it was meant to fix, and did not reliably fix it;
+the real cause was in how documents were split. Re-ranking may be worth having
+one day. Calling it the highest-value fix was a guess, and it was wrong.
 
 ---
 
@@ -283,12 +397,24 @@ Real ones, not modesty.
 
 ```bash
 pip install -e ".[watch,dev]"
-pytest
+pytest            # 560 tests, ~3s
+pytest evals/     # 17 tests, ~60s — needs Ollama and both default models
+ruff check .
 ```
 
-The tests need no Ollama and touch no real folder. They use a fake embedder that
-turns text into vectors by hashing, and temp directories throughout, so they run
-the same way on your laptop and in CI on Linux, macOS and Windows.
+Two suites, because they prove different things. `pytest` proves the code does
+what it says, and **cannot** tell you whether the answers are any good: an
+autouse fixture makes real embedding calls raise, so nothing in `tests/` ever
+sees a real vector. That leaves every retrieval constant unprotected by it,
+which is what [`evals/`](../evals/) is for — a fixed set of questions scored
+against real models over a synthetic corpus. It is deliberately not part of
+`pytest` and not in CI: it needs a model server and is not deterministic enough
+to gate a merge. Run it after touching anything in the retrieval path.
+
+The unit tests need no Ollama and touch no real folder. They use a fake
+embedder that turns text into vectors by hashing, and temp directories
+throughout, so they run the same way on your laptop and in CI on Linux, macOS
+and Windows.
 
 The interactive UI is tested in two halves. `session.py` is pure logic — what a
 typed line means, which file `/open 2` refers to — and is tested directly.
