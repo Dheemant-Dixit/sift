@@ -5,7 +5,7 @@ Optional — `sift index` on demand is enough for most people, and the CLI runs 
 fast sync before every query anyway. This is for folders busy enough that you'd
 rather the work happened in the background.
 
-Three details that matter in practice:
+Four details that matter in practice:
 
 1. DEBOUNCING. One user action — saving a file, a browser finishing a download,
    unzipping an archive — fires many rapid filesystem events. Re-indexing on
@@ -18,7 +18,13 @@ Three details that matter in practice:
    stay unindexed indefinitely. So when a sync reports deferred files, the
    watcher schedules itself another pass.
 
-3. ONE SYNC AT A TIME. A sync can outlast the next debounce window, and each
+3. SHUTDOWN. Ctrl-C used to kill a sync wherever it had got to: the timer runs
+   on a daemon thread, so the interpreter does not wait for it. Nothing is torn
+   — store.save() writes then renames — but the work is dropped without a word,
+   and the kill can land between the two files a sync writes. So shutdown now
+   gives a running sync a grace period to finish.
+
+4. ONE SYNC AT A TIME. A sync can outlast the next debounce window, and each
    timer fires on its own thread, so two of them can meet. update_index is
    load-modify-save over one index.npz: the run that finishes last wins, and
    what it writes was built before the other run's file existed. That file
@@ -40,6 +46,11 @@ log = logging.getLogger(__name__)
 DEBOUNCE_SECONDS = 3.0
 RETRY_SECONDS = 5.0   # how long to wait before re-checking deferred files
 
+# How long Ctrl-C waits for a sync that is already running. A bound rather than
+# a promise: a folder big enough to outlast this is a folder where re-syncing
+# costs less than an unresponsive Ctrl-C. A second Ctrl-C drops it immediately.
+SHUTDOWN_GRACE_SECONDS = 30.0
+
 
 class DebouncedReindexHandler:
     """Collapse bursts of file events into a single debounced re-index."""
@@ -49,6 +60,11 @@ class DebouncedReindexHandler:
         self._timer: threading.Timer | None = None
         self._lock = threading.Lock()       # guards the timer handle only
         self._syncing = threading.Lock()    # held while update_index runs
+        # Read and written without a lock on purpose: a bool assignment is
+        # atomic, and the only thing it guards against is arming a new timer
+        # while shutting down. Taking _lock for it would put cancel() back in
+        # the deadlock described on cancel().
+        self._stopping = False
 
     # watchdog calls this; typed loosely so watchdog stays an optional import.
     def dispatch(self, event) -> None:
@@ -74,6 +90,8 @@ class DebouncedReindexHandler:
             self._timer.start()
 
     def _run(self) -> None:
+        if self._stopping:
+            return
         # Two locks, deliberately. _syncing cannot be _lock: _run schedules its
         # own retry, _schedule takes _lock, and a threading.Lock is not
         # reentrant — one lock across both would deadlock the watcher on the
@@ -95,7 +113,7 @@ class DebouncedReindexHandler:
                 return
             log.info("  %d chunks across %d files (%.1fs)",
                      stats.chunks_total, stats.files_total, stats.seconds)
-            if stats.deferred:
+            if stats.deferred and not self._stopping:
                 # Files were still being written. Nothing else will wake us for
                 # them, so come back on our own.
                 log.info("  %d file(s) still being written — re-checking shortly", stats.deferred)
@@ -103,10 +121,44 @@ class DebouncedReindexHandler:
         finally:
             self._syncing.release()
 
-    def cancel(self) -> None:
+    def cancel(self, grace: float = 0.0) -> None:
+        """Stop scheduling. With `grace`, let a sync already running finish.
+
+        Waiting is not tidiness. The timer thread is a daemon, so without this
+        the interpreter drops it mid-sync at shutdown. Measured, the kill lands
+        in one of three places: during embedding (the work is simply thrown
+        away), inside store.save() between the temp write and the rename (which
+        leaves index.tmp.npz sitting in the data dir holding your document
+        text), or between store.save() and manifest.save() (which leaves the
+        manifest one sync behind the store). All three heal on the next run,
+        which is why this is a grace period and not a guarantee — but none of
+        them is mentioned to the user, who only sees "Stopping ...".
+
+        _lock is released before waiting, deliberately. `_run` takes _syncing
+        and then _lock — through _schedule, on the deferred path. Waiting for
+        _syncing while still holding _lock inverts that order and hangs the
+        watcher on shutdown: the same deadlock the two locks exist to avoid,
+        moved somewhere new.
+        """
+        self._stopping = True
         with self._lock:
             if self._timer:
                 self._timer.cancel()
+        if grace <= 0:
+            return
+        if self._syncing.acquire(blocking=False):     # nothing was running
+            self._syncing.release()
+            return
+        log.info("Finishing the sync in progress (Ctrl-C again to drop it) ...")
+        try:
+            if self._syncing.acquire(timeout=grace):
+                self._syncing.release()
+            else:
+                log.warning("  ! still syncing after %.0fs — dropping it", grace)
+        except KeyboardInterrupt:
+            # Must not escape: watch() calls this from a finally block, and an
+            # exception here would skip observer.stop() and leave the threads up.
+            log.info("  dropped — the next sync will pick up where this left off")
 
 
 def watch(settings: Settings | None = None) -> None:
@@ -141,6 +193,6 @@ def watch(settings: Settings | None = None) -> None:
     except KeyboardInterrupt:
         log.info("Stopping ...")
     finally:
-        handler.cancel()
+        handler.cancel(SHUTDOWN_GRACE_SECONDS)
         observer.stop()
         observer.join()

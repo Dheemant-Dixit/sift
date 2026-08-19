@@ -226,6 +226,204 @@ def test_cancel_is_safe_before_anything_was_scheduled():
     DebouncedReindexHandler(get_settings()).cancel()   # must not raise
 
 
+# --- shutdown: Ctrl-C used to kill the sync it landed on --------------------
+#
+# The timer runs on a daemon thread, so the interpreter never waited for it.
+# Measured against the real loop with SIGINT: the sync dies wherever it had got
+# to and `watch()` still prints "Stopping ..." and exits 0. Nothing is torn, but
+# the work is dropped without a word, and the kill can land inside store.save()
+# between the temp write and the rename — which leaves index.tmp.npz in the data
+# dir holding document text.
+#
+# Four wrong fixes, one test each. Waiting while holding _lock deadlocks the
+# deferred path; waiting without _stopping lets the sync arm a fresh timer on
+# its way out; waiting with no bound makes Ctrl-C unresponsive on a stuck sync;
+# and letting the second Ctrl-C escape skips observer.stop() in watch()'s
+# finally block.
+
+@pytest.fixture
+def slow_sync(monkeypatch):
+    """A sync that blocks until released, so shutdown can be tested mid-flight."""
+    from sift_downloads.index import SyncStats
+    box = SimpleNamespace(started=threading.Event(), release=threading.Event(),
+                          finished=[], stats=SyncStats(), after=None)
+
+    def sync(settings):
+        box.started.set()
+        box.release.wait(timeout=5)
+        if box.after:
+            box.after()
+        box.finished.append(1)
+        return box.stats
+
+    monkeypatch.setattr(watch_module, "update_index", sync)
+    return box
+
+
+def test_ctrl_c_waits_for_a_sync_already_running(slow_sync):
+    """The finding. Without the grace period the work is thrown away silently."""
+    from sift_downloads.config import get_settings
+    handler = DebouncedReindexHandler(get_settings())
+
+    syncing = threading.Thread(target=handler._run, daemon=True)
+    syncing.start()
+    assert slow_sync.started.wait(timeout=2), "the sync never started — this proves nothing"
+
+    stopping = threading.Thread(target=lambda: handler.cancel(grace=5), daemon=True)
+    stopping.start()
+    stopping.join(timeout=0.3)
+    assert stopping.is_alive(), "cancel() returned while the sync was still running"
+
+    slow_sync.release.set()
+    stopping.join(timeout=5)
+    assert not stopping.is_alive()
+    assert slow_sync.finished == [1]
+
+
+def test_waiting_for_the_sync_does_not_deadlock_the_deferred_path(slow_sync):
+    """The tempting one-liner: acquire _syncing inside the `with self._lock` block.
+
+    It is the deadlock the two locks already exist to avoid, moved somewhere
+    new. `_run` takes _syncing and then _lock — that is what _schedule does on
+    the deferred path — so waiting for _syncing while holding _lock inverts the
+    order and hangs the watcher on shutdown, with no output at all.
+
+    The sync calls _schedule itself here to stand in for that path
+    deterministically; the real one runs it a few lines later.
+    """
+    from sift_downloads.config import get_settings
+    handler = DebouncedReindexHandler(get_settings())
+    slow_sync.after = lambda: handler._schedule(30)     # wants _lock, holds _syncing
+
+    syncing = threading.Thread(target=handler._run, daemon=True)
+    syncing.start()
+    assert slow_sync.started.wait(timeout=2)
+
+    stopping = threading.Thread(target=lambda: handler.cancel(grace=5), daemon=True)
+    stopping.start()
+    stopping.join(timeout=0.3)
+    slow_sync.release.set()
+
+    # Promptly, not eventually. Holding _lock across the wait does not hang
+    # forever here — it stalls until the grace period expires and then drops
+    # the sync it was supposed to be waiting for, which "returns eventually"
+    # cannot tell apart from success.
+    stopping.join(timeout=2)
+    assert not stopping.is_alive(), "cancel() blocked _schedule instead of waiting for it"
+    syncing.join(timeout=2)
+    assert not syncing.is_alive()
+    assert slow_sync.finished == [1]
+    handler.cancel()          # drop the timer _schedule just armed
+
+
+def test_shutdown_does_not_arm_another_sync(slow_sync):
+    """A sync reporting deferred files re-arms the timer. During shutdown it must not.
+
+    Otherwise cancel() cancels the pending timer, waits for the sync, and the
+    sync schedules a fresh one on its way out — so the watcher starts another
+    sync while the process is trying to leave, and that one is killed exactly
+    as before.
+    """
+    from sift_downloads.config import get_settings
+    from sift_downloads.index import SyncStats
+    slow_sync.stats = SyncStats(deferred=2)
+    handler = DebouncedReindexHandler(get_settings())
+
+    syncing = threading.Thread(target=handler._run, daemon=True)
+    syncing.start()
+    assert slow_sync.started.wait(timeout=2)
+
+    stopping = threading.Thread(target=lambda: handler.cancel(grace=5), daemon=True)
+    stopping.start()
+    stopping.join(timeout=0.3)
+    slow_sync.release.set()
+    stopping.join(timeout=5)
+    syncing.join(timeout=5)
+
+    assert slow_sync.finished == [1], "the deferred sync did not finish"
+    assert handler._timer is None, "shutdown armed a retry that will be killed anyway"
+
+
+def test_a_stuck_sync_does_not_make_ctrl_c_hang_forever(caplog):
+    """The grace period is a bound, not a promise."""
+    from sift_downloads.config import get_settings
+    handler = DebouncedReindexHandler(get_settings())
+    handler._syncing.acquire()          # a sync that is never going to finish
+
+    # On a thread on purpose. An unbounded wait is the obvious "just let it
+    # finish" fix, and called inline it hangs the whole pytest run with no
+    # output instead of failing — which is worse than not testing it.
+    stopping = threading.Thread(target=lambda: handler.cancel(grace=0.1), daemon=True)
+    stopping.start()
+    stopping.join(timeout=3)
+    assert not stopping.is_alive(), "Ctrl-C waited past the grace period"
+    assert "dropping it" in caplog.text
+
+
+def test_a_second_ctrl_c_during_the_wait_is_absorbed(caplog):
+    """cancel() runs inside watch()'s finally block.
+
+    A KeyboardInterrupt escaping from here skips observer.stop() and join(), so
+    the impatient second Ctrl-C leaves the watchdog threads up and the process
+    hung — the opposite of what it was pressed for.
+    """
+    import logging
+
+    from sift_downloads.config import get_settings
+    caplog.set_level(logging.INFO)            # the shutdown notices are INFO
+    handler = DebouncedReindexHandler(get_settings())
+
+    class InterruptedLock:
+        def acquire(self, blocking=True, timeout=-1):
+            if not blocking:
+                return False              # report a sync as running
+            raise KeyboardInterrupt       # the user's second Ctrl-C
+
+        def release(self):
+            raise AssertionError("nothing was acquired")
+
+    handler._syncing = InterruptedLock()
+    try:
+        handler.cancel(grace=5)
+    except KeyboardInterrupt:
+        # Caught rather than allowed to propagate: pytest treats a bare
+        # KeyboardInterrupt as "abort the session", so the wrong fix would
+        # cancel the run instead of failing this test.
+        pytest.fail("the second Ctrl-C escaped cancel(); watch()'s finally block "
+                    "would skip observer.stop()")
+    assert "dropped" in caplog.text
+
+
+def test_watch_hands_its_grace_period_to_cancel(monkeypatch, make_file):
+    """Wiring, not behaviour — but a grace period watch() never passes is decoration.
+
+    cancel() defaults to grace=0 so "cancel" still means cancel for every other
+    caller, and that default is exactly what makes it possible to fix the
+    shutdown path and never reach it.
+    """
+    from sift_downloads.index import SyncStats
+    make_file("a.md", "x")
+    monkeypatch.setattr(watch_module, "update_index", lambda s: SyncStats())
+
+    stopped = []
+    fake = SimpleNamespace(schedule=lambda *a, **k: None, start=lambda: None,
+                           stop=lambda: stopped.append(1), join=lambda: None)
+    monkeypatch.setitem(sys.modules, "watchdog.observers",
+                        SimpleNamespace(Observer=lambda: fake))
+    monkeypatch.setattr(watch_module.time, "sleep",
+                        lambda n: (_ for _ in ()).throw(KeyboardInterrupt))
+
+    graces = []
+    monkeypatch.setattr(DebouncedReindexHandler, "cancel",
+                        lambda self, grace=0.0: graces.append(grace))
+
+    watch_module.watch()
+
+    assert graces == [watch_module.SHUTDOWN_GRACE_SECONDS]
+    assert graces[0] > 0, "watch() passed a grace period that waits for nothing"
+    assert stopped == [1], "the finally block did not finish"
+
+
 # --- watch() without watchdog installed ------------------------------------
 
 def test_a_missing_watchdog_explains_the_extra_to_install(monkeypatch, make_file):
