@@ -263,6 +263,15 @@ def _do_sync(ui: Ui, quiet: bool = False) -> None:
     except (ConfigError, IndexProblem) as e:
         ui.error(str(e).split("\n")[0])
         return
+    except Exception as e:
+        # Anything else is a model server saying no — a missing model answers
+        # /api/embed with a 404, and litellm raises its own class for it. The
+        # startup sync runs outside the session loop, so an escape here is a
+        # traceback instead of a session. cli._quiet_sync makes the same catch.
+        first = str(e).split("\n")[0]
+        ui.error(f"could not refresh the index ({type(e).__name__}: {first})")
+        log.debug("sync failed", exc_info=True)
+        return
     ui.session.synced = True
     if stats.upgraded:
         # Announced even in quiet mode: the sync just took a minute instead of a
@@ -279,6 +288,52 @@ def _do_sync(ui: Ui, quiet: bool = False) -> None:
     else:
         ui.note(f"index up to date — {stats.chunks_total} chunks "
                 f"across {stats.files_total} files")
+
+
+def _offer_setup(ui: Ui) -> None:
+    """First run: offer to fetch the models, right where the user already is.
+
+    A stranger's first `sift` starts here with nothing pulled, and every path
+    out of this function has to leave a working session behind — a decline, a
+    failed download and a Ctrl-C included. Nothing here is fatal: without
+    models sift can still find files by name.
+
+    sift does not install Ollama (see setup.py), so a missing server is
+    explained rather than offered — there would be nothing to say yes to.
+    """
+    from sift_downloads.setup import SetupError, plan_setup, pull_model
+
+    plan = plan_setup(ui.session.settings)
+    if plan.ready:
+        return
+
+    for model, why in plan.skipped:
+        ui.note(f"{model}: {why}")
+
+    if not plan.server_up:
+        ui.error("Ollama isn't running, so searching inside documents won't work yet.")
+        ui.note(f"try: {plan.install_hint}")
+        return
+
+    ui.note(f"first run — sift needs: {', '.join(plan.to_pull)}")
+    ui.note("they come from ollama.com into Ollama's store; Ctrl-C is safe, it resumes")
+    reply = read_line(InMemoryHistory(), title="download them now? [y/N]")
+    if (reply or "").strip().lower() not in ("y", "yes"):
+        return
+
+    with ui.console.status("[dim]downloading...[/dim]", spinner="dots") as spinner:
+        for model in plan.to_pull:
+            try:
+                pull_model(model, lambda p: spinner.update(
+                    f"[dim]{p.model} — {p.status} "
+                    f"{human_size(p.completed)} / {human_size(p.total)}[/dim]"))
+            except SetupError as e:
+                ui.error(str(e))
+                return
+            except KeyboardInterrupt:
+                ui.note(f"stopped — run `sift setup` to resume {model}")
+                return
+            ui.note(f"{model} ready")
 
 
 def _do_status(ui: Ui) -> None:
@@ -344,6 +399,7 @@ def run(settings: Settings | None = None) -> int:
     ui = Ui(session)
 
     ui.banner()
+    _offer_setup(ui)
     _do_sync(ui, quiet=True)
 
     history = InMemoryHistory()

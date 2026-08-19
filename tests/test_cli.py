@@ -424,6 +424,132 @@ def test_purge_with_nothing_to_delete_says_so(monkeypatch, capsys):
     assert "Nothing to delete" in capsys.readouterr().out
 
 
+# --- setup -----------------------------------------------------------------
+
+@pytest.fixture
+def a_plan(monkeypatch):
+    """Control what setup thinks needs doing, and record what it pulled."""
+    import sift_downloads.setup as setup
+
+    box = {"plan": setup.SetupPlan(to_pull=["ollama/nomic-embed-text"]), "pulled": [],
+           "events": [setup.PullProgress("ollama/nomic-embed-text", "pulling", 5, 10)]}
+
+    def fake_pull(model, on_progress):
+        box["pulled"].append(model)
+        for event in box["events"]:
+            on_progress(event)
+
+    monkeypatch.setattr(setup, "plan_setup", lambda *a, **k: box["plan"])
+    monkeypatch.setattr(setup, "pull_model", fake_pull)
+    return box
+
+
+def test_setup_with_nothing_missing_says_so_and_points_at_index(a_plan, capsys):
+    import sift_downloads.setup as setup
+    a_plan["plan"] = setup.SetupPlan()
+    assert main(["setup"]) == 0
+    assert a_plan["pulled"] == []
+    assert "sift index" in capsys.readouterr().out
+
+
+def test_setup_names_the_models_and_asks_before_downloading(a_plan, monkeypatch, capsys):
+    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+    assert main(["setup"]) == 0
+    assert a_plan["pulled"] == ["ollama/nomic-embed-text"]
+    out = capsys.readouterr().out
+    assert "ollama/nomic-embed-text" in out
+    assert "Ctrl-C" in out          # the reassurance that makes consent honest
+
+
+def test_declining_downloads_nothing(a_plan, monkeypatch, capsys):
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")
+    assert main(["setup"]) == 1
+    assert a_plan["pulled"] == []
+
+
+def test_setup_with_yes_never_asks(a_plan, monkeypatch):
+    monkeypatch.setattr("builtins.input",
+                        lambda prompt="": pytest.fail("--yes must not prompt"))
+    assert main(["setup", "--yes"]) == 0
+    assert a_plan["pulled"] == ["ollama/nomic-embed-text"]
+
+
+def test_setup_in_a_pipe_refuses_rather_than_prompting(a_plan, monkeypatch, capsys):
+    """A prompt nobody can answer is a hang. Say what flag would have worked."""
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False, raising=False)
+    monkeypatch.setattr("builtins.input",
+                        lambda prompt="": pytest.fail("must not prompt in a pipe"))
+    assert main(["setup"]) == 1
+    assert a_plan["pulled"] == []
+    assert "--yes" in capsys.readouterr().err
+
+
+def test_setup_without_a_server_gives_the_install_command_and_pulls_nothing(a_plan, capsys):
+    import sift_downloads.setup as setup
+    a_plan["plan"] = setup.SetupPlan(to_pull=["ollama/nomic-embed-text"], server_up=False,
+                                     install_hint="brew install ollama")
+    assert main(["setup", "--yes"]) == 1
+    assert a_plan["pulled"] == []
+    out = capsys.readouterr().out
+    assert "brew install ollama" in out
+    assert "ollama/nomic-embed-text" in out     # still says what it would then pull
+
+
+def test_a_model_sift_cannot_pull_is_printed(a_plan, capsys):
+    import sift_downloads.setup as setup
+    a_plan["plan"] = setup.SetupPlan(skipped=[("claude-sonnet-4-5", "install it yourself")])
+    assert main(["setup"]) == 0
+    assert "claude-sonnet-4-5" in capsys.readouterr().out
+
+
+def test_a_failed_pull_reports_it_and_exits_nonzero(a_plan, monkeypatch, capsys):
+    import sift_downloads.setup as setup
+
+    def boom(model, on_progress):
+        raise setup.SetupError("could not pull ollama/x: file does not exist")
+
+    monkeypatch.setattr(setup, "pull_model", boom)
+    assert main(["setup", "--yes"]) == 1
+    assert "file does not exist" in capsys.readouterr().err
+
+
+def test_ctrl_c_during_a_download_says_it_can_be_resumed(a_plan, monkeypatch, capsys):
+    import sift_downloads.setup as setup
+
+    def interrupted(model, on_progress):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(setup, "pull_model", interrupted)
+    assert main(["setup", "--yes"]) == 130
+    assert "resume" in capsys.readouterr().out.lower()
+
+
+def test_progress_in_a_log_is_one_line_per_step_not_one_per_update(a_plan, monkeypatch, capsys):
+    """`--yes` is the script path, and \\r redraw turns a script's log into one
+    enormous line. Off a terminal, only a change of step is worth printing."""
+    import sift_downloads.setup as setup
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: False, raising=False)
+    a_plan["events"] = [
+        setup.PullProgress("ollama/m", "pulling 797b", 1, 1000),
+        setup.PullProgress("ollama/m", "pulling 797b", 500, 1000),
+        setup.PullProgress("ollama/m", "pulling 797b", 1000, 1000),
+        setup.PullProgress("ollama/m", "success", 1000, 1000),
+    ]
+    assert main(["setup", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "\r" not in out
+    assert out.count("pulling 797b") == 1
+    assert "success" in out
+
+
+def test_progress_is_shown_in_human_sizes(a_plan, monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True, raising=False)
+    import sift_downloads.setup as setup
+    a_plan["events"] = [setup.PullProgress("ollama/m", "pulling", 1536, 4096)]
+    assert main(["setup", "--yes"]) == 0
+    assert "1.5KB" in capsys.readouterr().out
+
+
 # --- doctor ----------------------------------------------------------------
 
 def test_doctor_exits_zero_when_everything_passes(monkeypatch, capsys):

@@ -284,6 +284,95 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_setup(args) -> int:
+    """Download the models sift is configured to use.
+
+    The counterpart to `sift doctor`: doctor reports, this fixes. It never
+    installs Ollama — see setup.py for where that line is and why.
+    """
+    from sift_downloads.setup import SetupError, plan_setup, pull_model
+
+    settings = get_settings()
+    plan = plan_setup(settings)
+
+    for model, why in plan.skipped:
+        print(f"  · {model}: {why}")
+
+    if plan.ready:
+        print("Everything sift needs is already here.")
+        print("  Next:  sift index")
+        return 0
+
+    print("sift needs these models:")
+    for model in plan.to_pull:
+        print(f"  {model}")
+
+    if not plan.server_up:
+        print("\nOllama isn't running, and sift doesn't install it for you.")
+        print(f"  Try:  {plan.install_hint}")
+        print("\nThen run `sift setup` again and it will pull them.")
+        return 1
+
+    print("\nThey come from ollama.com and are stored by Ollama, not by sift.")
+    print("Sizes are shown as they download. Ctrl-C is safe — Ollama resumes "
+          "where it stopped.")
+
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print("Nothing was downloaded. Re-run with --yes to confirm.", file=sys.stderr)
+            return 1
+        try:
+            reply = input("\nDownload them now? [y/N] ")
+        except (EOFError, KeyboardInterrupt):
+            print("\nStopped.")
+            return 1
+        if reply.strip().lower() not in ("y", "yes"):
+            print("Nothing downloaded.")
+            return 1
+
+    print()
+    render = _pull_renderer()
+    for model in plan.to_pull:
+        try:
+            pull_model(model, render)
+        except SetupError as e:
+            print(f"\n{e}", file=sys.stderr)
+            return 1
+        except KeyboardInterrupt:
+            print(f"\nStopped. Re-run `sift setup` — Ollama resumes {model} "
+                  f"from where it left off.")
+            return 130
+        print()
+
+    print("Done.  Next:  sift index")
+    return 0
+
+
+def _pull_renderer():
+    """Draw pull progress, in whichever way suits where the output is going.
+
+    On a terminal that is one line redrawn in place, padded so a shorter status
+    erases a longer one. Off a terminal — `sift setup --yes` in a script, which
+    is what the flag is for — a carriage return draws nothing and just runs
+    every update into one enormous line, so only a change of step is printed.
+    """
+    live = sys.stdout.isatty()
+    last = ""
+
+    def render(progress) -> None:
+        nonlocal last
+        line = f"  {progress.model}  {progress.status}"
+        if progress.total:
+            line += f"  {human_size(progress.completed)} / {human_size(progress.total)}"
+        if live:
+            print(f"\r{line:<72}", end="", flush=True)
+        elif progress.status != last:
+            print(line, flush=True)
+        last = progress.status
+
+    return render
+
+
 def cmd_doctor(args) -> int:
     from sift_downloads.doctor import FAIL, OK, WARN, run_checks
 
@@ -440,6 +529,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_unlock.add_argument("files", nargs="*",
                           help="specific files (default: every locked file)")
     p_unlock.set_defaults(func=cmd_unlock)
+
+    p_setup = subparsers.add_parser(
+        "setup", parents=[common], help="download the models sift needs",
+        description="Pull the configured models into Ollama. Never installs "
+                    "Ollama itself.")
+    p_setup.add_argument("-y", "--yes", action="store_true",
+                         help="download without asking (for scripts)")
+    p_setup.set_defaults(func=cmd_setup)
 
     p_doctor = subparsers.add_parser("doctor", parents=[common],
                                      help="check the setup and say how to fix it")

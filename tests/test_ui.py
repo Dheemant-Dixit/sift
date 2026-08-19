@@ -329,6 +329,26 @@ def test_a_broken_sync_reports_one_line_not_a_traceback(screen, monkeypatch):
     assert "no Ollama" in out and "second line" not in out
 
 
+def test_a_model_that_is_not_pulled_does_not_end_the_session(screen, monkeypatch):
+    """Reproduced against a real Ollama: with the server up but the model not
+    pulled, litellm raises APIConnectionError — which is neither ConfigError nor
+    IndexProblem, so it escaped `run()`'s startup sync as a traceback. That is
+    the wall of litellm errors doctor.py exists to prevent, on the one path a
+    declined setup offer lands in. cli._quiet_sync already handled it; this did not.
+    """
+    import sift_downloads.index as index
+    monkeypatch.setattr(index, "update_index",
+                        lambda s: (_ for _ in ()).throw(
+                            RuntimeError("OllamaException - 404 Not Found\n"
+                                         "Provider List: https://litellm...")))
+    ui_module._do_sync(screen, quiet=True)          # must not raise
+    out = screen.read()
+    assert "404 Not Found" in out
+    # One line, like the ConfigError branch above it. Measured on a real cold
+    # run: litellm's message is five lines of links and debug advice.
+    assert "Provider List" not in out
+
+
 def test_status_without_an_index_says_how_to_build_one(screen):
     dispatch(screen, Request(UiCommand.STATUS))
     assert "/sync" in screen.read()
@@ -359,3 +379,102 @@ def test_status_reports_a_corrupt_index_without_crashing(screen, embedder, make_
     screen.session.settings.index_path.write_bytes(b"garbage")
     dispatch(screen, Request(UiCommand.STATUS))
     assert screen.read().strip()
+
+
+# --- the first-run offer ----------------------------------------------------
+#
+# `sift` with no models does nothing useful, and the person most likely to be
+# in that state is the one who just installed it. The offer is the one place
+# the session asks a question before the prompt appears, so what it must never
+# do is get in the way: a decline, a failure and a Ctrl-C all have to land back
+# at a working session.
+
+@pytest.fixture
+def offer(monkeypatch):
+    """Stub the plan, the pull and the question. Records what happened."""
+    import sift_downloads.setup as setup
+
+    box = {"plan": setup.SetupPlan(to_pull=["ollama/nomic-embed-text"]),
+           "answer": "y", "pulled": [], "asked": 0}
+
+    def fake_pull(model, on_progress):
+        box["pulled"].append(model)
+        on_progress(setup.PullProgress(model, "pulling", 1, 2))
+
+    def fake_ask(*args, **kwargs):
+        box["asked"] += 1
+        return box["answer"]
+
+    monkeypatch.setattr(setup, "plan_setup", lambda *a, **k: box["plan"])
+    monkeypatch.setattr(setup, "pull_model", fake_pull)
+    monkeypatch.setattr(ui_module, "read_line", fake_ask)
+    return box
+
+
+def test_a_first_run_offers_to_download_what_is_missing(screen, offer):
+    ui_module._offer_setup(screen)
+    assert offer["pulled"] == ["ollama/nomic-embed-text"]
+    assert "ollama/nomic-embed-text" in screen.read()
+
+
+def test_nothing_is_asked_when_the_models_are_already_there(screen, offer):
+    import sift_downloads.setup as setup
+    offer["plan"] = setup.SetupPlan()
+    ui_module._offer_setup(screen)
+    assert offer["asked"] == 0
+    assert screen.read().strip() == ""
+
+
+def test_declining_downloads_nothing_and_says_nothing_more(screen, offer):
+    offer["answer"] = ""
+    ui_module._offer_setup(screen)
+    assert offer["pulled"] == []
+
+
+def test_a_missing_ollama_is_explained_instead_of_offered(screen, offer):
+    """sift cannot install Ollama, so there is nothing to say yes to."""
+    import sift_downloads.setup as setup
+    offer["plan"] = setup.SetupPlan(to_pull=["ollama/nomic-embed-text"], server_up=False,
+                                    install_hint="brew install ollama")
+    ui_module._offer_setup(screen)
+    assert offer["asked"] == 0
+    assert "brew install ollama" in screen.read()
+
+
+def test_a_failed_download_reports_one_line_and_returns_to_the_session(screen, offer,
+                                                                       monkeypatch):
+    import sift_downloads.setup as setup
+
+    def boom(model, on_progress):
+        raise setup.SetupError("could not pull ollama/x: file does not exist")
+
+    monkeypatch.setattr(setup, "pull_model", boom)
+    ui_module._offer_setup(screen)
+    assert "file does not exist" in screen.read()
+
+
+def test_ctrl_c_during_the_download_returns_to_the_session(screen, offer, monkeypatch):
+    import sift_downloads.setup as setup
+
+    def interrupted(model, on_progress):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(setup, "pull_model", interrupted)
+    ui_module._offer_setup(screen)          # must not raise
+    assert "resume" in screen.read().lower()
+
+
+def test_the_session_offers_setup_before_it_tries_to_sync(monkeypatch, capsys):
+    """Order is the whole point: the sync is what fails without models.
+
+    `run()` is otherwise untested here — with read_line stubbed this asserts the
+    wiring, not prompt_toolkit.
+    """
+    from sift_downloads.config import get_settings
+    done: list[str] = []
+    monkeypatch.setattr(ui_module, "_offer_setup", lambda ui: done.append("offer"))
+    monkeypatch.setattr(ui_module, "_do_sync", lambda ui, quiet=False: done.append("sync"))
+    monkeypatch.setattr(ui_module, "read_line", lambda *a, **k: None)
+
+    assert ui_module.run(get_settings()) == 0
+    assert done == ["offer", "sync"]

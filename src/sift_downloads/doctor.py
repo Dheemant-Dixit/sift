@@ -75,6 +75,20 @@ def _model_present(installed: list[str], model: str) -> bool:
 OLLAMA_PREFIXES = ("ollama/", "ollama_chat/")
 
 
+def ollama_install_hint() -> str:
+    """How this platform installs Ollama. Public because `sift setup` says it too.
+
+    sift never runs this for you: `brew install` and `curl | sh` write to the
+    user's machine, which is the line the README's "sift never installs
+    anything" promise draws. Pulling a model into a server they already chose
+    to run stays on the safe side of it.
+    """
+    return {
+        "Darwin": "brew install ollama && brew services start ollama",
+        "Linux": "curl -fsSL https://ollama.com/install.sh | sh",
+    }.get(platform.system(), "install Ollama from https://ollama.com/download")
+
+
 def check_models(settings: Settings, models: Sequence[str] | None = None) -> list[Check]:
     """Is the machinery behind these models actually available?
 
@@ -86,8 +100,8 @@ def check_models(settings: Settings, models: Sequence[str] | None = None) -> lis
 
     `models` defaults to both, which is what `sift doctor` wants — a report on
     the whole setup. `preflight` passes the ones the command will actually call:
-    checking both refused `sift index` with "ollama pull llama3.1:8b", telling
-    the user to download a chat model that indexing never loads.
+    checking both refused `sift index` over a chat model that indexing
+    never loads, and told the user to download 8GB to fix it.
 
     What this must never do is claim a model is local or non-local. That is
     check_privacy's question and it owns the tables that answer it.
@@ -104,14 +118,10 @@ def check_models(settings: Settings, models: Sequence[str] | None = None) -> lis
 
     installed = _installed_ollama_models()
     if installed is None:
-        install_hint = {
-            "Darwin": "brew install ollama && brew services start ollama",
-            "Linux": "curl -fsSL https://ollama.com/install.sh | sh",
-        }.get(platform.system(), "install Ollama from https://ollama.com/download")
         return [Check(
             "ollama", FAIL,
             f"no Ollama server at {_ollama_base()}",
-            f"{install_hint}\n     (or point sift at a cloud model — see README)",
+            f"{ollama_install_hint()}\n     (or point sift at a cloud model — see README)",
         ), *unchecked]
 
     checks = [Check("ollama", OK, f"running at {_ollama_base()}")]
@@ -119,10 +129,10 @@ def check_models(settings: Settings, models: Sequence[str] | None = None) -> lis
         if _model_present(installed, model):
             checks.append(Check(f"model {model}", OK, "pulled"))
         else:
-            checks.append(Check(
-                f"model {model}", FAIL, "not pulled",
-                f"ollama pull {_bare_model_name(model)}",
-            ))
+            # `sift setup` rather than `ollama pull <model>`: setup pulls every
+            # missing model in one go, and which model is missing is already the
+            # name of this check.
+            checks.append(Check(f"model {model}", FAIL, "not pulled", "sift setup"))
     return [*checks, *unchecked]
 
 
