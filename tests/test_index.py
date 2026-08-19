@@ -401,6 +401,24 @@ def test_embed_texts_uses_the_configured_model(monkeypatch):
     assert seen["model"] == "ollama/some-model"
 
 
+def test_a_default_huggingface_model_is_refused_before_anything_is_sent():
+    """The leak, pinned at the call that would have sent the bytes.
+
+    `huggingface/` was on the local prefix list, so nothing gated it: litellm
+    resolved it to https://router.huggingface.co and POSTed the folder there.
+    Asserting on `uses_cloud()` alone would not catch a future change that
+    gates somewhere else, so this goes through `embed_texts` — the one point
+    both paths cross.
+
+    Reverting the fix does not merely fail this, it fails it with
+    `no_model_server`'s "this test reached litellm", which is the whole point:
+    the call went out.
+    """
+    configure(embed_model="huggingface/BAAI/bge-small-en-v1.5")
+    with pytest.raises(ConfigError, match="--allow-cloud"):
+        embed_texts(["net pay 4,812.00, account ending 4471"])
+
+
 def test_embedding_nothing_makes_no_request(monkeypatch):
     import litellm
 

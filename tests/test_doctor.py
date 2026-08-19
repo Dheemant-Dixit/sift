@@ -128,6 +128,23 @@ def test_an_lm_studio_setup_is_not_pushed_through_the_ollama_check(ollama, make_
     preflight(get_settings())    # raises ConfigError under the naive fix
 
 
+def test_doctor_does_not_promise_local_for_a_default_huggingface_setup(ollama, make_file):
+    """`sift doctor` is the report you run *to check this*, and it was wrong.
+
+    Not a doctor bug — check_privacy reads `uses_cloud()` and asked a correct
+    question of a bad list — but this is where a user would have caught it, so
+    this is where it gets pinned.
+    """
+    make_file("a.md", "x")
+    configure(embed_model="huggingface/BAAI/bge-small-en-v1.5")
+
+    privacy = next(c for c in run_checks(get_settings(), include_index=False)
+                   if c.name == "privacy")
+
+    assert privacy.failed
+    assert "fully local" not in privacy.detail
+
+
 def test_every_configured_model_gets_a_line(ollama):
     """A model sift cannot check must still be named.
 
