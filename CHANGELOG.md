@@ -2,6 +2,94 @@
 
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org).
 
+## 0.4.0 — 2026-08-19
+
+**Getting started stopped being a four-tool errand, and Windows users can now
+tell that sift supports Windows.**
+
+Work on sift has come from two places: reading the code, and watching it get an
+answer wrong. This release came from a third — watching what a stranger has to
+do before sift does anything at all, which turned out to be: install a model
+runner, look up two model names, pull them by hand, then find out whether it
+worked.
+
+**No rebuild.** The index format is unchanged from 0.2.0, so upgrading costs
+nothing.
+
+### `sift setup`
+
+One command downloads what sift needs.
+
+```
+$ sift setup
+sift needs these models:
+  ollama/nomic-embed-text
+  ollama_chat/llama3.1:8b
+
+They come from ollama.com and are stored by Ollama, not by sift.
+Sizes are shown as they download. Ctrl-C is safe — Ollama resumes where it stopped.
+
+Download them now? [y/N]
+```
+
+It reads the same two facts `sift doctor` reads — is Ollama running, does it
+have the configured models — and acts on them. Three lines are drawn on purpose:
+
+- **It pulls models. It never installs Ollama.** Pulling into a server you
+  already chose to run is reversible and stays inside Ollama's store.
+  `brew install` and `curl | sh` write to your machine, and sift does not do
+  that to you. With no server, setup prints the install command for your
+  platform and stops.
+- **It only touches models Ollama can answer for.** An LM Studio or cloud model
+  is named and skipped rather than passed over quietly.
+- **No download size is hardcoded.** A "5.2GB" in the prompt would go stale the
+  next time a default model changes. Setup names the models and shows real byte
+  totals as they arrive.
+
+`--yes` skips the prompt for scripts. Without a terminal and without `--yes` it
+refuses rather than prompting into the void.
+
+### A bare `sift` offers to set itself up
+
+Starting the session with nothing pulled used to end in a wall of litellm
+connection errors — the exact failure `sift doctor` exists to prevent, on the
+path a new user is most likely to take. The session now offers to fetch what it
+needs before it tries to use it, and a decline, a failed download or a Ctrl-C
+all leave a working session behind: without models, sift can still find files by
+name.
+
+### Windows was always supported. Now the README says so.
+
+sift resolves your real Downloads folder on Windows through
+`SHGetKnownFolderPath`, specifically because OneDrive moves it somewhere
+`%USERPROFILE%\Downloads` will not find, and it honours `LOCALAPPDATA` for the
+index. Windows has run in CI on every pull request since the beginning. The
+README opened with `brew install ollama` and did not contain the word "Windows".
+
+The install block now covers macOS, Linux and Windows, and is three lines on
+each. The same fix reaches anyone whose desktop calls the folder
+`Téléchargements`.
+
+### Smaller things
+
+- `sift doctor` now says `sift setup` for a missing model instead of one
+  `ollama pull` line per model.
+- Download progress redraws in place on a terminal and prints one line per step
+  when it is not on one, so `sift setup --yes` in a script produces a log rather
+  than one enormous line.
+
+### Docs
+
+The README leads with the interactive session, because that is the product; the
+one-shot commands follow as what they are, the same features for pipes and cron.
+The settings table moved to [`.env.example`](.env.example), which already
+documented every variable in more detail, and the litellm price-list mechanism
+moved to [`docs/DESIGN.md`](docs/DESIGN.md) — the privacy promise it supports
+stays in the README, `lsof -i` invitation included.
+
+591 unit tests and 17 answer-quality evals, on Linux, macOS and Windows across
+Python 3.10 to 3.14.
+
 ## 0.3.0 — 2026-08-19
 
 **A privacy leak, and the rest of what a line-by-line audit turned up.**
