@@ -62,14 +62,38 @@ def _model_present(installed: list[str], model: str) -> bool:
     return any(name == want or name.split(":")[0] == want.split(":")[0] for name in installed)
 
 
+# The models doctor can actually interrogate. Deliberately NOT
+# config.LOCAL_MODEL_PREFIXES, which is a longer list answering a different
+# question: that one is "does this model send text off the machine?", this one is
+# "can sift ask the server what it has?". Ollama publishes an inventory at
+# /api/tags; LM Studio and a local llama.cpp do not. Answering the privacy
+# question with this tuple is what once made doctor print "using non-local
+# models: lm_studio/…" on the line above check_privacy calling the same model
+# local. If a third prefix ever grows an inventory endpoint, it belongs here —
+# and still says nothing about where the text goes.
+OLLAMA_PREFIXES = ("ollama/", "ollama_chat/")
+
+
 def check_models(settings: Settings) -> list[Check]:
-    """Is the machinery behind the configured models actually available?"""
-    local_models = [m for m in (settings.embed_model, settings.chat_model)
-                    if m.startswith(("ollama/", "ollama_chat/"))]
-    if not local_models:
-        return [Check("models", OK,
-                      f"using non-local models: "
-                      f"{settings.embed_model}, {settings.chat_model}")]
+    """Is the machinery behind the configured models actually available?
+
+    Every configured model gets a line, including the ones sift cannot check.
+    Two reasons. A model with no line at all reads as fine, and this is the
+    report someone runs precisely when nothing works. And an unchecked model is
+    a real caveat: doctor said `[ok]` for an LM Studio setup and then `sift
+    index` dumped the litellm traceback this module exists to prevent.
+
+    What this must never do is claim a model is local or non-local. That is
+    check_privacy's question and it owns the tuple that answers it.
+    """
+    models = (settings.embed_model, settings.chat_model)
+    ollama_models = [m for m in models if m.startswith(OLLAMA_PREFIXES)]
+    unchecked = [
+        Check(f"model {m}", OK, "not checked — sift can only verify Ollama models")
+        for m in models if not m.startswith(OLLAMA_PREFIXES)
+    ]
+    if not ollama_models:
+        return unchecked
 
     installed = _installed_ollama_models()
     if installed is None:
@@ -81,10 +105,10 @@ def check_models(settings: Settings) -> list[Check]:
             "ollama", FAIL,
             f"no Ollama server at {_ollama_base()}",
             f"{install_hint}\n     (or point sift at a cloud model — see README)",
-        )]
+        ), *unchecked]
 
     checks = [Check("ollama", OK, f"running at {_ollama_base()}")]
-    for model in local_models:
+    for model in ollama_models:
         if _model_present(installed, model):
             checks.append(Check(f"model {model}", OK, "pulled"))
         else:
@@ -92,7 +116,7 @@ def check_models(settings: Settings) -> list[Check]:
                 f"model {model}", FAIL, "not pulled",
                 f"ollama pull {_bare_model_name(model)}",
             ))
-    return checks
+    return [*checks, *unchecked]
 
 
 def check_source(settings: Settings) -> Check:
