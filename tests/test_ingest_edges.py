@@ -258,3 +258,65 @@ def test_load_documents_skips_what_it_cannot_read(make_file, make_pdf):
 def test_load_documents_returns_the_text(make_file):
     make_file("notes.md", "the quick brown fox")
     assert load_documents()[0]["text"] == "the quick brown fox"
+
+
+# --- files that vanish between the two passes of the scan -------------------
+#
+# scan_source reads every candidate in one loop (content_key) and stat()s them
+# in a second loop (file_fingerprint). For the first file in a big folder, the
+# gap between the two is the whole read pass — and `sift watch` scans while the
+# user is actively deleting things. Both tests delete a file for real, inside
+# that window, rather than patching file_fingerprint to raise.
+
+def _delete_while_hashing(monkeypatch, victim: Path, trigger: str) -> list[str]:
+    """Delete `victim` for real while content_key is reading `trigger`.
+
+    Returns the list of files content_key actually ran on, so a test can prove
+    the scan reached the window instead of passing on an empty candidate set.
+    """
+    import sift_downloads.ingest as ingest
+    real = ingest.content_key
+    hashed: list[str] = []
+
+    def hook(path, *args, **kwargs):
+        key = real(path, *args, **kwargs)
+        hashed.append(path.name)
+        if path.name == trigger:
+            victim.unlink()
+        return key
+
+    monkeypatch.setattr(ingest, "content_key", hook)
+    return hashed
+
+
+def test_a_file_deleted_mid_scan_is_reported_not_crashed_on(source_dir, make_file, monkeypatch):
+    gone = make_file("aaa.md", "first document")
+    make_file("zzz.md", "last document")
+    hashed = _delete_while_hashing(monkeypatch, gone, trigger="zzz.md")
+
+    scan = scan_source()
+
+    assert hashed == ["aaa.md", "zzz.md"]  # the scan really reached the window
+    assert list(scan.files) == [str(source_dir / "zzz.md")]
+    assert scan.skipped[str(gone)] == "unreadable (FileNotFoundError)"
+
+
+def test_a_surviving_copy_is_indexed_when_the_canonical_vanishes(
+        source_dir, make_file, monkeypatch):
+    """The copies of a vanished canonical are still real files.
+
+    Skipping the whole group would leave `Statement (1).pdf.md` on disk,
+    indexed nowhere, and listed as a duplicate of a path that no longer
+    exists — which find.py hides from results. That loses a document silently,
+    which is worse than the crash this replaces.
+    """
+    canonical = make_file("Statement.pdf.md", "identical")
+    copy = make_file("Statement (1).pdf.md", "identical")
+    hashed = _delete_while_hashing(monkeypatch, canonical, trigger="Statement.pdf.md")
+
+    scan = scan_source()
+
+    assert hashed == ["Statement (1).pdf.md", "Statement.pdf.md"]
+    assert list(scan.files) == [str(copy)]
+    assert scan.duplicates == {}
+    assert scan.skipped[str(canonical)] == "unreadable (FileNotFoundError)"
