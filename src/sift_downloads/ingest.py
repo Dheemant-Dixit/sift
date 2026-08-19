@@ -271,10 +271,19 @@ def scan_source(settings: Settings | None = None) -> ScanResult:
 
     duplicates: dict[str, str] = {}
     for group in by_content.values():
-        canonical, *copies = sorted(group, key=_canonical_name_rank)
-        keep[str(canonical)] = file_fingerprint(canonical)
-        for copy in copies:
-            duplicates[str(copy)] = str(canonical)
+        ordered = sorted(group, key=_canonical_name_rank)
+        for rank, canonical in enumerate(ordered):
+            try:
+                keep[str(canonical)] = file_fingerprint(canonical)
+            except OSError as e:
+                # Deleted between the read pass above and this stat. Its copies
+                # are still real files, so hand the canonical role to the next
+                # one rather than losing the whole group.
+                skipped[str(canonical)] = f"unreadable ({type(e).__name__})"
+                continue
+            for copy in ordered[rank + 1:]:
+                duplicates[str(copy)] = str(canonical)
+            break
 
     return ScanResult(files=keep, duplicates=duplicates, skipped=skipped, deferred=deferred)
 
