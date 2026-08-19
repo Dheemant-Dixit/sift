@@ -152,6 +152,64 @@ def test_unlock_can_be_pointed_at_a_named_file(
     assert "statement.pdf" in passwords["prompts"][0]
 
 
+def test_unlock_through_a_symlinked_source_keeps_its_chunks(
+        tmp_path, monkeypatch, source_dir, embedder, make_pdf, passwords):
+    """The next sync must not delete what `unlock` just indexed.
+
+    cmd_unlock resolved the path it was handed while scan_source only
+    expanduser()s the source folder. Through a symlink the two disagree: the
+    chunks land under the resolved path, the next sync doesn't find that path
+    in the scan, calls it deleted and drops it. The password is already gone by
+    then, so the work cannot be recovered without asking for it again.
+
+    Every other test misses this because pytest's tmp_path is already resolved,
+    which makes the .resolve() call a no-op.
+    """
+    from sift_downloads.config import configure
+    from sift_downloads.store import VectorStore
+
+    make_pdf("statement.pdf", text="secret", password="hunter2")
+    link = tmp_path / "link"
+    link.symlink_to(source_dir)
+    monkeypatch.setenv("SIFT_SOURCE", str(link))
+    configure()
+
+    update_index(embedder=embedder)
+    passwords["answers"] = ["hunter2"]
+    assert main(["unlock", str(link / "statement.pdf")]) == 0
+
+    unlocked = len(VectorStore.load())
+    assert unlocked > 0, "unlock indexed nothing, so the sync below proves nothing"
+
+    update_index(embedder=embedder)
+    assert len(VectorStore.load()) == unlocked
+
+
+def test_unlock_given_a_relative_path_keeps_its_chunks(
+        monkeypatch, source_dir, embedder, make_pdf, passwords):
+    """The other half of the same rule: unlock's key must match the scanner's.
+
+    The scanner's keys are absolute because SIFT_SOURCE is. A relative argument
+    left relative keys the chunks as "statement.pdf", which the next sync also
+    reads as deleted. Pinned separately because dropping the absolute step
+    entirely still passes the symlink test above.
+    """
+    from sift_downloads.store import VectorStore
+
+    make_pdf("statement.pdf", text="secret", password="hunter2")
+    update_index(embedder=embedder)
+
+    monkeypatch.chdir(source_dir)
+    passwords["answers"] = ["hunter2"]
+    assert main(["unlock", "statement.pdf"]) == 0
+
+    unlocked = len(VectorStore.load())
+    assert unlocked > 0, "unlock indexed nothing, so the sync below proves nothing"
+
+    update_index(embedder=embedder)
+    assert len(VectorStore.load()) == unlocked
+
+
 def test_unlock_reports_a_named_file_that_does_not_exist(
         embedder, make_file, capsys):
     make_file("notes.md", "plain")

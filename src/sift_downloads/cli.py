@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -153,7 +154,13 @@ def cmd_unlock(args) -> int:
     manifest = Manifest.load(settings=settings)
 
     if args.files:
-        targets = [str(Path(f).expanduser().resolve()) for f in args.files]
+        # abspath, not resolve(): the index is keyed by the path the scanner
+        # produced, and scan_source only expanduser()s the source folder.
+        # resolve() also follows symlinks, so through a symlinked source the
+        # chunks landed under a key the next scan never yields — which
+        # update_index reads as "deleted" and drops. abspath still makes a
+        # relative argument absolute, which is the half of resolve() we need.
+        targets = [os.path.abspath(Path(f).expanduser()) for f in args.files]
     else:
         targets = manifest.locked()
 
