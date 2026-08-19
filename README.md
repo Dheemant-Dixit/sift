@@ -6,9 +6,6 @@ sift searches your Downloads folder by meaning, not just by filename, and
 answers questions about what's in there. Everything runs on your own machine —
 no API keys, no accounts, no documents uploaded.
 
-*Installs as `sift-downloads` (plain `sift` was taken on PyPI). The command you
-type is `sift`.*
-
 ```
 ● sift  /Users/you/Downloads
 
@@ -39,45 +36,51 @@ nothing takes over your screen and you keep your scrollback.
 
 ## Install
 
+**1. A local model runner.** sift talks to [Ollama](https://ollama.com) over
+`localhost`. It is free, and it is the only thing you install yourself.
+
 ```bash
-# 1. a local model runner (free, but ~5GB of models to download)
-brew install ollama && brew services start ollama     # macOS
-# curl -fsSL https://ollama.com/install.sh | sh       # Linux
+brew install ollama && brew services start ollama    # macOS
+curl -fsSL https://ollama.com/install.sh | sh        # Linux
+```
 
-ollama pull nomic-embed-text     # 274MB — turns text into vectors
-ollama pull llama3.1:8b          # 4.9GB — writes the answers
+```powershell
+irm https://ollama.com/install.ps1 | iex             # Windows
+```
 
-# 2. sift  (the command is `sift`; the package name has a suffix because
-#           plain `sift` was already taken on PyPI)
+Windows also has a plain installer at
+[ollama.com/download](https://ollama.com/download), if you prefer one.
+
+**2. sift.**
+
+```bash
 pip install "sift-downloads[watch]"
-
-# 3. read your Downloads folder (a few hundred files takes under a minute)
-sift index
-
-# 4. go
-sift
+sift setup      # downloads the two models it needs (~5GB, once)
+sift            # go
 ```
 
-If anything looks wrong, run `sift doctor`. It checks each piece and prints the
-exact command to fix whatever is broken.
+`sift setup` names what it is fetching before it starts, and Ctrl-C is safe —
+Ollama resumes where it stopped. The models it downloads belong to Ollama; the
+only thing sift itself writes is its own index. If anything looks wrong,
+`sift doctor` checks each piece and prints the command that fixes it.
 
-**On a small disk or a slow connection?** The 4.9GB one is only used to write
-the final answer. Swap it for something smaller — `sift` still finds files just
-as well, and answers get a little blunter:
+**Short on disk?** The 4.9GB model only writes the final answer. `sift setup
+--chat-model ollama_chat/llama3.2:3b` pulls a 2GB one instead — answers get a
+little blunter, searching is unaffected. The 274MB embedding model is what does
+the searching, and it is not optional.
 
-```bash
-ollama pull llama3.2:3b
-sift ask "..." --chat-model ollama_chat/llama3.2:3b    # or SIFT_CHAT_MODEL
-```
+**All three platforms are supported and tested on every change.** sift finds
+your real Downloads folder on each — including when OneDrive has moved it, and
+when your desktop calls it `Téléchargements`.
 
-The 274MB embedding model is the one that does the searching, and it is not
-optional.
+*Installs as `sift-downloads` because plain `sift` was taken on PyPI. The
+command you type is `sift`.*
 
 ---
 
 ## Using it
 
-Run `sift` on its own for the interactive session above:
+Run `sift` on its own. That is the whole tool.
 
 | Type this | What happens |
 |---|---|
@@ -88,23 +91,8 @@ Run `sift` on its own for the interactive session above:
 | `/sync` `/status` `/help` | update the index, see what's indexed, list commands |
 | `ctrl-d` | quit |
 
-Or run single commands without the session:
-
-| Command | What it does |
-|---|---|
-| `sift find "bank statement"` | ranked list of files; add `--open 1` to open one |
-| `sift ask "what's my policy number?"` | one grounded answer with sources |
-| `sift index` | update the index (usually under a second) |
-| `sift index --rebuild` | start over; needed after changing models |
-| | (an upgrade that changes the index format re-embeds itself on the next `sift index`) |
-| `sift unlock` | read your password-protected PDFs (asks for each password) |
-| `sift status` | what's indexed, and what was skipped and why |
-| `sift search "query"` | raw passage scores, for tuning |
-| `sift watch` | keep the index updated as the folder changes |
-| `sift purge` | delete the index (your files are untouched) |
-
-`find` and `ask` update the index before running, so results are never stale.
-Use `--no-sync` to skip that.
+The index updates itself when the session starts and whenever you `/sync`, so
+what you downloaded five minutes ago is already searchable.
 
 ### Why it finds files it can't read
 
@@ -135,13 +123,40 @@ $ sift status
 
 `sift unlock` asks for each password, reads the file, and adds it to the index.
 **The password is never stored** — not in a file, not in your keychain — so
-`sift index --rebuild` will ask again. That is deliberate. Two things worth
-knowing before you run it:
+`sift index --rebuild` asks again. That is deliberate. So is telling you this:
+unlocking copies that document's text into the index, which is **not**
+encrypted, so a file you locked on purpose becomes readable in `index.npz`.
 
-- Unlocking puts that document's text into the index, which is **not** encrypted.
-  A file you locked on purpose becomes readable in `index.npz`.
-- Some PDFs are locked only to stop printing or copying, and open with an empty
-  password. sift tries that first, so those never reach you as a prompt.
+Some PDFs are locked only to stop printing, and open with an empty password.
+sift tries that first, so those never reach you as a prompt.
+
+### Also scriptable
+
+Everything the session does is also a command, for pipes, cron and scripts.
+
+| Command | What it does |
+|---|---|
+| `sift find "bank statement"` | ranked list of files; add `--open 1` to open one |
+| `sift ask "what's my policy number?"` | one grounded answer with sources |
+| `sift setup` | download the models sift needs; `--yes` to skip the prompt |
+| `sift index` | update the index (usually under a second) |
+| `sift index --rebuild` | start over; needed after changing models |
+| `sift unlock` | read your password-protected PDFs (asks for each password) |
+| `sift status` | what's indexed, and what was skipped and why |
+| `sift search "query"` | raw passage scores, for tuning |
+| `sift watch` | keep the index updated as the folder changes |
+| `sift doctor` | check the setup and say how to fix it |
+| `sift purge` | delete the index (your files are untouched) |
+
+`find` and `ask` update the index before running, so results are never stale.
+Use `--no-sync` to skip that. An upgrade that changes the index format
+re-embeds itself on the next run.
+
+`sift watch` keeps the index fresh while you work: it re-syncs a few seconds
+after the folder goes quiet, and runs one sync at a time. Ctrl-C lets a running
+sync finish — up to 30 seconds — rather than throwing the work away. For a
+background service, [`contrib/`](contrib/) has ready-made launchd and systemd
+files. They are documented, not installed for you.
 
 ---
 
@@ -152,16 +167,11 @@ Your Downloads folder holds bank statements, ID scans and contracts. So:
 - **No document text leaves your machine.** Both models run locally through
   Ollama, so every byte of every file you index is read, embedded and answered
   on `localhost`.
-- **Not even a phone-home.** sift talks to models through
-  [litellm](https://github.com/BerriAI/litellm), which by default downloads a
-  public price list of known models from `raw.githubusercontent.com` when it
-  loads. That request carries nothing about you, but it is still a request, so
-  sift turns it off (`LITELLM_LOCAL_MODEL_COST_MAP`) and uses the copy shipped
-  inside the package. sift does no cost accounting and never reads that list.
-
-  The result is that a default run opens **no connection except to Ollama on
-  `localhost`**. Don't take our word for it — `lsof -i`, Little Snitch or
-  `tcpdump` will tell you. Please check.
+- **Not even a phone-home.** A default run opens **no connection except to
+  Ollama on `localhost`** — sift turns off the one background request its model
+  library would otherwise make. Don't take our word for it: `lsof -i`, Little
+  Snitch or `tcpdump` will tell you. Please check.
+  ([how that is done](docs/DESIGN.md#where-the-privacy-gates-live))
 - **The index holds the actual text of your documents.** It lives in your
   system's user-data folder — `sift status` prints the path. Don't commit it or
   share the `.npz`. `sift purge` deletes it. This includes anything you
@@ -182,70 +192,17 @@ The two models are separate settings. You can keep embeddings local, so your
 whole folder stays home, and use a cloud model only to write the final answer
 from the few passages retrieved.
 
-Permission is asked per command, for the models that command actually calls.
+**Permission is asked per command, for the models that command actually calls.**
 `sift index` and `sift find` only ever use the embedding model, so a local
-embedder plus a cloud chat model indexes and searches with no `--allow-cloud`
-at all; `sift ask` is where the question is put to the cloud model, so that is
-where it asks. The warning follows the same rule and names each cloud model
-once, so a run that embeds with one provider and answers with another tells you
-about both.
+embedder plus a cloud chat model indexes and searches with no `--allow-cloud` at
+all; `sift ask` is where the question reaches the cloud model, so that is where
+it asks. The warning follows the same rule and names each cloud model once, so a
+run that embeds with one provider and answers with another tells you about both.
 
 **Running a model server yourself?** `ollama/` and `lm_studio/` always count as
-local — they only ever reach a server you chose. `huggingface/` is different:
-litellm sends it to `router.huggingface.co` unless you point it somewhere, so
-sift treats it as a cloud model until you set `HF_API_BASE` (or
-`HUGGINGFACE_API_BASE`) to your own endpoint.
-
----
-
-## Settings
-
-Nothing needs configuring. Everything can be. A CLI flag beats an environment
-variable, which beats `.env`, which beats the default.
-
-| Setting | Flag | Env var | Default |
-|---|---|---|---|
-| Folder to search | `--source` | `SIFT_SOURCE` | your Downloads folder |
-| Where the index lives | `--data-dir` | `SIFT_DATA_DIR` | system user-data folder |
-| Embedding model | `--embed-model` | `SIFT_EMBED_MODEL` | `ollama/nomic-embed-text` |
-| Answering model | `--chat-model` | `SIFT_CHAT_MODEL` | `ollama_chat/llama3.1:8b` |
-| Chunk size / overlap | `--chunk-size` / `--chunk-overlap` | `SIFT_CHUNK_SIZE` / `SIFT_CHUNK_OVERLAP` | 1000 / 150 |
-| Indexed unit, max / min | — | `SIFT_CHILD_SIZE` / `SIFT_CHILD_MIN` | 300 / 200 |
-| Document opening kept per passage | — | `SIFT_DOC_HEAD_CHARS` | 120 |
-| Passages per answer | `--top-k` | `SIFT_TOP_K` | 5 |
-| Relevance bar for `ask` | `--min-score` | `SIFT_MIN_SCORE` | 0.55 |
-| Candidate bar for `find` | — | `SIFT_FIND_MIN_SCORE` | 0.40 |
-| Largest file to read | `--max-file-mb` | `SIFT_MAX_FILE_MB` | 50 |
-| Allow cloud models | `--allow-cloud` | `SIFT_ALLOW_CLOUD` | off |
-
-sift is not limited to Downloads — `sift find "..." --source ~/Documents` works
-fine. Downloads is just where this problem actually bites.
-
-See [`.env.example`](.env.example).
-
-**A warning about `--min-score`.** The default 0.55 was measured for
-`nomic-embed-text` on one particular set of documents. It does not transfer. If
-you change embedding models, work out your own — see
-[the calibration guide](docs/DESIGN.md#calibrating-the-relevance-bar).
-
----
-
-## Keeping the index fresh
-
-The index updates incrementally. sift records each file's size and modification
-time, so a sync only re-reads what actually changed — about a second, against
-forty for a full rebuild. That is why `find` and `ask` can afford to sync before
-every query.
-
-`sift watch` keeps it updated while you work: it re-syncs a few seconds after
-the folder goes quiet, and it runs one sync at a time. Ctrl-C lets a sync that
-is already running finish — up to 30 seconds — rather than killing it partway
-and throwing the work away. Press Ctrl-C again to drop it immediately; the next
-sync picks up where it left off either way.
-
-If you want it updated without a terminal open, [`contrib/`](contrib/) has
-ready-made launchd and systemd files. They are documented, not installed for
-you. sift never writes to your system.
+local. `huggingface/` does not, because litellm sends it to
+`router.huggingface.co` unless you point it at your own endpoint — see
+[`.env.example`](.env.example) for the variable that fixes that.
 
 ---
 
@@ -256,9 +213,8 @@ you. sift never writes to your system.
   real fix — see `sift unlock` above.)
 - **No re-ranker.** Ranking is by topic similarity, not by "does this answer the
   question", so a document merely *about* your query can outrank the one that
-  answers it. A cross-encoder was built and measured against the worst case in
-  this folder; it did not reliably fix it, and the fix turned out to belong at
-  ingestion instead. It isn't shipped.
+  answers it. A cross-encoder was built, measured, and not shipped: it did not
+  reliably fix the worst case, and the real fix belonged at ingestion.
 - **Top level only.** sift doesn't walk into subfolders, on purpose — one
   unzipped project would drag in thousands of files.
 - **Answers aren't guaranteed correct.** A small local model can still drift past
@@ -269,10 +225,29 @@ you. sift never writes to your system.
   titles, or two people's account numbers, a model can hand you one person's
   real, correctly cited value as the other's. Nothing is fabricated, so a
   "check it against the sources" pass sees nothing wrong. Chunking is set up to
-  make this less likely (above), not to make it impossible.
+  make this less likely, not to make it impossible.
 
 The [design notes](docs/DESIGN.md#limitations) go into why, and what would fix
 each one.
+
+---
+
+## Settings
+
+Nothing needs configuring. Everything can be. A CLI flag beats an environment
+variable, which beats `.env`, which beats the default.
+
+- `sift <command> --help` lists the flags.
+- [`.env.example`](.env.example) is the full list of environment variables, with
+  what each one is for.
+
+sift is not limited to Downloads — `sift find "..." --source ~/Documents` works
+fine. Downloads is just where this problem actually bites.
+
+**A warning about `--min-score`.** The default 0.55 was measured for
+`nomic-embed-text` on one particular set of documents. It does not transfer. If
+you change embedding models, work out your own — see
+[the calibration guide](docs/DESIGN.md#calibrating-the-relevance-bar).
 
 ---
 
@@ -284,51 +259,32 @@ product against a matrix of unit vectors.
 
 **The text sift matches is not the text it reads to you.** One window can't do
 both jobs: matching wants it small, so the embedding is *about* one thing;
-answering wants it large, so the model can see enough to be right. So each
-passage is indexed as a small unit (≈300 characters, cut on line boundaries) and
-served as the ~1000-character window around it. A question matches something
-precise; the model reads the whole passage it came from.
-
-Two limits on that, both of which exist because of measured failures rather than
-taste:
-
-- **An indexed unit has a floor** (`SIFT_CHILD_MIN`, 200). Cut smaller and a
-  passage stops being about anything: a payslip row reading only
-  `Bank A/C No 12345…` embeds as *an account number*, so a question about
-  somebody else's bank account retrieves your payslip. At 200 the same text
-  embeds as *a payslip*, and stops matching.
-- **Each passage carries its document's opening line** (`SIFT_DOC_HEAD_CHARS`,
-  120). Documents name their owner once, at the top, and never again — so a
-  clause lifted from page 4 of a form cannot be attributed to anyone. Given a
-  tax form containing both the employee's job title and the HR signatory's,
-  every model tested answered "what is my designation?" with the *signatory's*
-  title. With the opening line attached, they answer correctly.
-
-Both numbers were measured on one folder of real documents. Like `--min-score`,
-they are starting points, not constants.
+answering wants it large, so the model can see enough to be right. Each passage
+is indexed as a small unit and served as the wider window around it. Both sizes,
+and the floor under them, were set by measuring real failures — a passage cut too
+small stops being *about* anything, and a clause lifted from page 4 of a form
+can't be attributed to anyone unless it carries the document's opening line.
 
 **→ [Design notes](docs/DESIGN.md)** — the pipeline, which file to read first,
 why the vector store is shaped the way it is, how to calibrate the relevance
-bar, and the full limitations.
+bar, where the privacy gates live, and the full limitations.
 
 ## Development
 
 ```bash
 pip install -e ".[watch,dev]"
-pytest            # unit suite: 560 tests, ~3s. No Ollama, touches no real folder
+pytest            # unit suite: 591 tests, ~3s. No Ollama, touches no real folder
 ruff check .      # both of the above are required CI checks
 pytest evals/     # answer quality: 17 tests, ~60s. Needs Ollama, never runs in CI
 ```
 
 The unit suite proves the code does what it says. It deliberately cannot reach
-a model — real embedding calls raise — so it can't tell you whether the answers
-are any good. [`evals/`](evals/) is that second suite: a small synthetic corpus
-and a fixed set of questions, scored against real models. Of the two
-wrong-entity failures 0.2.0 fixed, one is genuinely pinned there — revert the
-fix and the test fails. The other does not reproduce on invented documents, so
-its test is labelled a guard rather than a proof.
-[`evals/README.md`](evals/README.md) says which is which, and why the
-difference matters. It isn't run in CI, because it needs a model server.
+a model — real embedding calls raise — so it cannot tell you whether the answers
+are any good. [`evals/`](evals/) is that second suite: a synthetic corpus and a
+fixed set of questions, scored against real models. It is honest about its own
+limits — one of its two headline tests is labelled a guard rather than a proof,
+because it does not fail when you revert the fix it guards.
+[`evals/README.md`](evals/README.md) says which is which, and why that matters.
 
 Releases go out by pushing a `vX.Y.Z` tag — the workflow checks the tag against
 the packaged version, the changelog and `main` before it publishes anything, and
