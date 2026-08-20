@@ -20,8 +20,11 @@ no API keys, no accounts, no documents uploaded.
 
 > ?what is the notice period and the deposit
 
-  Notice period: 60 days [lease-notes.md]
-  Security deposit: 100,000 INR, refundable within 30 days [lease-notes.md]
+  — reading from —
+    • lease-notes.md (chunk 0, 0.64)
+
+  Notice period: 60 days
+  Security deposit: 100,000 INR, refundable within 30 days
 
 ┌──────────────────────────| sift |──────────────────────────┐
 │>                                                           │
@@ -223,7 +226,7 @@ local. `huggingface/` does not, because litellm sends it to
 - **Grounded is not the same as correct.** The failure worth knowing about isn't
   invention — it's *attribution*. If your documents contain two people's job
   titles, or two people's account numbers, a model can hand you one person's
-  real, correctly cited value as the other's. Nothing is fabricated, so a
+  real, correctly retrieved value as the other's. Nothing is fabricated, so a
   "check it against the sources" pass sees nothing wrong. Chunking is set up to
   make this less likely, not to make it impossible.
 

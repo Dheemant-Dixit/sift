@@ -214,7 +214,13 @@ def test_the_system_prompt_forbids_outside_knowledge(retrieved):
     system = messages[0]["content"]
     assert messages[0]["role"] == "system"
     assert "ONLY" in system
-    assert "cite" in system.lower()
+
+
+def test_the_system_prompt_does_not_ask_for_inline_citations(retrieved):
+    """The UI names every file it read before the answer starts, so a filename
+    in the prose is duplication the user waits for token by token."""
+    system = build_messages("q", [chunk()])[0]["content"]
+    assert "cite" not in system.lower()
 
 
 def test_the_question_and_context_reach_the_model_together(retrieved):

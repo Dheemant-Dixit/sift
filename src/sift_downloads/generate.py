@@ -37,7 +37,6 @@ Rules:
 - Use ONLY the information in the CONTEXT. Do not use outside knowledge.
 - If the context does not contain the answer, say "I couldn't find that in your \
 documents." Do not guess.
-- Cite the source filename(s) in [brackets] after the facts you use.
 - Be concise."""
 
 # Placed AFTER the context, in the user turn, on purpose. Retrieved passages can
@@ -86,8 +85,10 @@ class Answer:
 def build_context_block(chunks: list[dict]) -> str:
     """Format retrieved chunks into a labeled context block.
 
-    Each passage is tagged with its filename so the model has something concrete
-    to cite — an untagged wall of text can only produce untraceable claims.
+    Each passage is tagged with its filename. The model is no longer asked to
+    cite it — the UI names every file it read before the answer starts — but the
+    tag stays, because it is what keeps two passages from reading as one
+    document.
 
     It is also tagged with the opening of its document, and that tag is load
     bearing. A passage lifted from the middle of a form does not say whose form
