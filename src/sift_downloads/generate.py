@@ -21,7 +21,13 @@ from dataclasses import dataclass, field
 
 import litellm
 
-from sift_downloads.config import Settings, check_cloud_consent, get_settings, warn_if_cloud
+from sift_downloads.config import (
+    Settings,
+    check_cloud_consent,
+    get_settings,
+    validate_top_k,
+    warn_if_cloud,
+)
 from sift_downloads.retrieve import search
 
 SYSTEM_PROMPT = """You are a helpful assistant that answers questions strictly \
@@ -178,6 +184,9 @@ def prepare(question: str, top_k: int | None = None, min_score: float | None = N
     settings = settings or get_settings()
     top_k = settings.top_k if top_k is None else top_k
     min_score = settings.min_score if min_score is None else min_score
+    # Checked here as well as in `search`, because the k handed down is
+    # multiplied: without this, `--top-k -1` is refused for being -5.
+    validate_top_k(top_k)
 
     retrieved = search(question, top_k=top_k * _OVERFETCH, settings=settings)
     # Filter first, then collapse: taking the distinct passages before the bar

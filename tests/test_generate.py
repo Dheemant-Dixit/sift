@@ -427,3 +427,10 @@ def test_the_same_passage_in_two_files_keeps_both_citations(retrieved):
                            passage("SHARED PARAGRAPH", "a", 0.80, filename="cv_final.pdf")]
     chunks, _ = prepare("q", top_k=2)
     assert [c["filename"] for c in chunks] == ["cv_v2.pdf", "cv_final.pdf"]
+
+
+def test_a_top_k_below_one_is_refused_by_the_number_the_caller_passed(retrieved):
+    """`prepare` multiplies k before handing it down, so the store's own check
+    would name the multiplied value: `--top-k -1` refused for being -5."""
+    with pytest.raises(ConfigError, match="got -1"):
+        prepare("q", top_k=-1)
