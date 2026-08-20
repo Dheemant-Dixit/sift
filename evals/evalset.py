@@ -33,9 +33,18 @@ RULES, FIXED IN ADVANCE
     may move it. It is 0.50 rather than the product default of 0.55 because
     0.55 was measured on a different set of documents and does not transfer —
     which is exactly what README.md warns users about, and this corpus is a
-    live demonstration of it. Measured separation here: the lowest positive
-    scores 0.528, the highest negative 0.479. 0.50 sits in that gap. Recalibrate
-    by measurement if the corpus changes; never nudge it to make a test pass.
+    live demonstration of it. Measured at 0.5.0: the eleven positives run
+    0.526 to 0.830, and the three negatives are NOT all below the bar. Blood
+    group scores 0.479 and the swallow 0.439, so the bar refuses those two
+    before the model is called. The landlord account number scores 0.621 and
+    is admitted; what it retrieves is rental-agreement prose about the owner
+    and the deposit, which does not contain an account number, so the model
+    refuses it in words. Both mechanisms are load-bearing and the suite
+    asserts the outcome, not the mechanism. No bar separates that negative:
+    any bar above 0.621 also refuses the designation positive at 0.526, and the
+    next two positives (0.627, 0.628) sit only 0.006 above that negative.
+    Recalibrate by measurement if the corpus changes; never nudge it to make
+    a test pass.
   - Markers are compiled case-insensitively, always, by compile_marker() below.
     They used to be compiled bare, and it silently scored three correct answers
     as misses because the model capitalised differently than the corpus did.
