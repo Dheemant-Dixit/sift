@@ -8,7 +8,7 @@ product unprotected: `child_size`, `child_min`, `doc_head_chars`, `min_score`.
 This directory is that missing net.
 
 ```bash
-pytest evals/          # 17 tests, needs Ollama + both default models, ~60s
+pytest evals/          # needs Ollama + both default models, ~60s
 ```
 
 It is **not** part of `pytest` (`testpaths` is `tests/`) and **not** in CI,

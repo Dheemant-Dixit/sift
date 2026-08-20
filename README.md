@@ -273,9 +273,9 @@ bar, where the privacy gates live, and the full limitations.
 
 ```bash
 pip install -e ".[watch,dev]"
-pytest            # unit suite: 591 tests, ~3s. No Ollama, touches no real folder
+pytest            # unit suite: ~3s. No Ollama, touches no real folder
 ruff check .      # both of the above are required CI checks
-pytest evals/     # answer quality: 17 tests, ~60s. Needs Ollama, never runs in CI
+pytest evals/     # answer quality: ~60s. Needs Ollama, never runs in CI
 ```
 
 The unit suite proves the code does what it says. It deliberately cannot reach
