@@ -88,18 +88,41 @@ Every name, number and identifier is invented.
 corpus is a live demonstration of that — it's a smaller, cleaner set of
 documents, and everything scores a little lower.
 
-Measured separation on this corpus:
+Measured on this corpus at 0.5.0, top-1 score per query:
 
 ```
-lowest positive   0.528   ("what is my designation?")
-highest negative  0.479   ("what is my blood group?")
+positives   0.526 .. 0.830    all 11 above the bar
+negatives   0.439  "what is the airspeed of an unladen swallow?"   below the bar
+            0.479  "what is my blood group?"                       below the bar
+            0.621  "what is the landlord's bank account number?"   ABOVE the bar
 ```
 
-0.50 sits in that gap. It was chosen once, from that measurement, and is fixed
-in `evalset.py`. **No test may move it.** If the corpus changes, recalibrate by
-measuring the separation again — never by nudging the number until something
-passes. That distinction is the whole difference between an eval and a
-rubber stamp.
+**The bar refuses two of the three negatives. The model refuses the third.**
+
+That distinction is worth stating plainly, because a table that reported only
+"lowest positive 0.528, highest negative 0.479" — as this one did until 0.5.0 —
+describes a clean separation this corpus does not have.
+
+The landlord query scores 0.621 because the corpus is full of prose about the
+landlord: who the owner is, what the deposit is, how it is refunded. Retrieval
+is working. The five passages it admits are four rental-agreement clauses and
+one Form 16 tax line, and **none of them contains an account number** — the one
+unit that does is in `payslip_march_2026.txt` and scores 0.494, below the bar,
+against this query. So the model gets relevant-looking context with the
+answer genuinely absent from it, and has to say so itself. That is the harder
+refusal and the one worth testing, which is why this negative is first in the
+list in `evalset.py`.
+
+No threshold fixes this. Refusing 0.621 means a bar above it, which also
+refuses the designation positive at 0.526 — and the next two positives
+(0.627, 0.628) sit only 0.006 above that negative. 0.50 is not chosen because it separates
+positives from negatives; it is chosen because it admits every positive while
+refusing the two negatives that *can* be refused arithmetically.
+
+The number is fixed in `evalset.py`. **No test may move it.** If the corpus
+changes, recalibrate by measuring again — never by nudging the number until
+something passes. That distinction is the whole difference between an eval and
+a rubber stamp.
 
 ## Rules
 
