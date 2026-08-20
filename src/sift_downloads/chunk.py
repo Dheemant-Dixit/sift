@@ -99,6 +99,14 @@ def line_blocks(text: str, max_chars: int, min_chars: int | None = None) -> list
     the block has reached `min_chars`. That distinction is the whole ballgame on
     badly-extracted PDFs, where a blank line between every visual row would
     otherwise yield one word per block.
+
+    A block ends for three reasons — a blank line, running out of room, or the
+    document running out — and `min_chars` is a floor on all three. Only the
+    blank-line break can decline to cut, so the other two enforce the floor
+    afterwards by merging: back into the block before it, or, for a first block
+    with nothing behind it, forward into the block after. Merging can carry a
+    block past `max_chars`, and that is the right way round — `max_chars` keeps
+    an embedding focused, `min_chars` keeps it about something at all.
     """
     if min_chars is None:
         min_chars = max_chars // 3
@@ -107,22 +115,41 @@ def line_blocks(text: str, max_chars: int, min_chars: int | None = None) -> list
     current: list[str] = []
     size = 0
 
+    def flush() -> None:
+        """End the current block, merging it back if it came out under the floor."""
+        nonlocal current, size
+        if not size:
+            return
+        block = "\n".join(current)
+        if blocks and len(block) < min_chars:
+            blocks[-1] += "\n" + block
+        else:
+            blocks.append(block)
+        current, size = [], 0
+
     for line in text.split("\n"):
         stripped = line.strip()
         if not stripped:
             if size >= min_chars:            # preferred break, but only once big enough
-                blocks.append("\n".join(current))
-                current, size = [], 0
+                flush()
             continue
         if size and size + len(stripped) + 1 > max_chars:
-            blocks.append("\n".join(current))
-            current, size = [], 0
+            flush()
         current.append(stripped)
         size += len(stripped) + 1
 
-    if size:
-        blocks.append("\n".join(current))
-    return [b for b in blocks if b.strip()]
+    flush()
+
+    # Only the first block can still be under the floor — every later one was
+    # merged back on its way out. It has nothing behind it, so it joins forward.
+    merged: list[str] = []
+    for block in blocks:
+        if merged and len(merged[-1]) < min_chars:
+            merged[-1] += "\n" + block
+        else:
+            merged.append(block)
+
+    return [b for b in merged if b.strip()]
 
 
 def document_head(text: str, limit: int) -> str:

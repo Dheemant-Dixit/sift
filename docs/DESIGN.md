@@ -104,6 +104,13 @@ embeds as *an account number*, so a question about somebody else's bank account
 retrieves your payslip and the model answers from it. At 200 the same text
 embeds as *a payslip*, and stops matching.
 
+The floor holds on every cut, including the ones that cannot decline to make
+one: a block that comes out too small is merged into its neighbour rather than
+indexed on its own. Merging can carry a block past `child_size`, which is the
+right way round — `child_size` keeps an embedding focused, `child_min` keeps it
+about something at all. The only unit that can still be under the floor is a
+whole window with less text than that in it, which has nothing to merge with.
+
 **Each served passage carries its document's opening line** (`doc_head_chars`,
 120). Documents name their owner once, at the top, and never again — so a clause
 lifted from page 4 cannot be attributed to anyone. Given a tax form holding both
