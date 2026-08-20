@@ -2,6 +2,59 @@
 
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org).
 
+## 0.5.0 — 2026-08-20
+
+**28% of the index was made of fragments too small to be about anything.**
+
+`chunk.py` documents `child_min` as a floor under every indexed unit, and 0.2.0
+raised it to 200 for a measured reason: a payslip row reading only
+`Bank A/C No 50100825844769` embeds as *an account number*, so a question about
+somebody else's bank account retrieves your payslip.
+
+The floor was only ever applied at one of the three places a block can end. A
+block that ended because it ran out of room, or because the document ran out,
+skipped it. On a real 36-document index that left this:
+
+```
+indexed units          6,934
+shortest unit          1 character
+under child_min (200)  1,978  —  28.5%
+under 50 characters    243
+```
+
+A block that comes out short is now merged into the block before it, or forward
+into the block after when it is the first one and has nothing behind it. After
+the rebuild the same folder gives 4,977 units, the shortest 118 characters, and
+5 under the floor — each of them a whole document window with less text than the
+floor in it, which has nothing to merge with.
+
+Merging can carry a block past `child_size`. That is the right way round:
+`child_size` keeps an embedding focused, `child_min` keeps it about something at
+all.
+
+**The first sync after upgrading re-embeds everything, once.** The index format
+goes to version 3, because a sync is keyed on file mtime — without the bump,
+every file you have not edited would keep its old fragments forever. `sift index`
+does it automatically and says so; on the folder above it took 50 seconds. A file
+you had unlocked needs `sift unlock` again — re-embedding cannot recover text that
+only a password made readable — and sift names each one rather than quietly
+dropping it.
+
+### What this does not fix
+
+- **The retrieval bar is unchanged.** `min_score` stays 0.55. It was re-derived
+  against 90 questions over a real corpus first, and every candidate move made
+  things worse: raising it refuses answerable questions, lowering it admits
+  passages the model then has to refuse in prose.
+- **Broad definitional questions are still hard.** Larger units help, but a book
+  that uses a term on every page may still never define it in one passage.
+- **Two tests, not one, and neither covers the other.** The obvious one-line fix
+  — drop anything under the floor — satisfies the floor by deleting your text.
+  It is pinned separately.
+
+595 unit tests and 17 answer-quality evals, on Linux, macOS and Windows across
+Python 3.10 to 3.14.
+
 ## 0.4.1 — 2026-08-20
 
 **A document told sift what to do, and sift did it.**
