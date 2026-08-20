@@ -2,6 +2,53 @@
 
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org).
 
+## 0.6.0 — 2026-08-20
+
+**`ask` was spending its context window reading the same passage twice.**
+
+sift indexes a passage as several small units and serves the whole ~1000-character
+window around whichever one matched. That means one window is reachable several
+ways — 2.77 ways on a real 36-document folder — and two of those ways can both
+land in the top 5. Nothing collapsed them, so the model was handed the same text
+in two separate slots. Measured over 24 real questions, **a third of them were
+served at least one passage twice.**
+
+Documents that repeat themselves add more. On the same folder, 4.6% of the index
+is text embedded more than once, and because identical text gives an identical
+embedding, the copies do not merely rank near each other — they score *exactly*
+the same and are retrieved together on every query. No relevance bar can separate
+them.
+
+`ask` now keeps one chunk per served passage and spends the freed slot on
+something the model has not read. Over those 24 questions:
+
+```
+distinct passages served   108  ->  115
+questions that gained one    6
+questions that lost a source 0
+```
+
+**Nothing to re-index.** The index format is unchanged, so upgrading costs
+nothing — unlike 0.5.0, which had to re-embed once.
+
+### What this does not fix
+
+- **Two files holding the same passage still take two slots.** Collapsing those
+  would drop the second file from the answer's sources, so the answer would claim
+  one origin for text that has two. A wasted slot is cheaper than a quiet false
+  statement about where an answer came from.
+- **The duplicates themselves are still in the index.** They are not sift's doing
+  — the largest source is one 482-page book that ships two of its appendices
+  twice, and two near-identical copies of the same CV. Nothing at ingestion could
+  have known better, and removing them would have forced a second re-embed.
+- **`sift find` and `sift search` are unchanged, on purpose.** `find` ranks files
+  and wants breadth across them; `search` shows raw index rows and is the tool for
+  calibrating `--min-score`, which a filtered view cannot do.
+- **The relevance bar is unchanged.** `min_score` stays 0.55.
+
+604 unit tests and 20 answer-quality evals, on Linux, macOS and Windows across
+Python 3.10 to 3.14.
+
 ## 0.5.0 — 2026-08-20
 
 **28% of the index was made of fragments too small to be about anything.**
