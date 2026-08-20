@@ -115,3 +115,46 @@ def test_negative_is_refused(ask, question):
     for a in ask(question, runs=2):
         assert a.refused or REFUSAL.search(a.text), \
             f"{question!r} should have been refused, got:\n  {a.text}"
+
+
+# --------------------------------------------------------------------------
+# One served passage per slot.
+# --------------------------------------------------------------------------
+
+def test_the_runbook_really_is_indexed_twice(indexed_corpus):
+    """The precondition for the test below, asserted rather than assumed.
+
+    oncall_runbook.md contains Appendix A twice, the way a real PDF export tool
+    duplicates a section. That only produces identical CHUNKS when the repeat is
+    long enough for the chunker's parent boundaries to lock onto the same
+    paragraph breaks in both copies — `_best_cut` snaps to a blank line in the
+    last 20% of its window, so two copies start out of phase and converge. A
+    short repeat never converges and this fixture would quietly test nothing.
+    """
+    import collections
+
+    from sift_downloads.retrieve import get_store
+
+    counts = collections.Counter(r.matched_text for r in get_store().records)
+    repeated = [text for text, n in counts.items() if n > 1]
+    assert repeated, "the corpus no longer contains a repeated section to collapse"
+
+
+def test_a_repeated_section_is_served_to_the_model_once(served):
+    """The regression. Two copies of one appendix tie exactly — same text, so
+    identical vectors — and without collapsing they take two slots and give the
+    model nothing it has not already read."""
+    chunks = served("how are severity levels assigned?")
+    assert chunks, "nothing cleared the bar, so this proves nothing"
+    passages = [c["text"] for c in chunks]
+    assert len(passages) == len(set(passages)), (
+        f"the same passage was served {len(passages) - len(set(passages))} extra time(s)")
+
+
+def test_collapsing_does_not_cost_a_source(served):
+    """Every file that had something to say still says it. The key is
+    (path, text), so two files holding the same passage both survive."""
+    chunks = served("how are severity levels assigned?")
+    assert len({c["filename"] for c in chunks}), "no sources at all"
+    for chunk in chunks:
+        assert chunk["text"].strip(), "an empty passage took a slot"

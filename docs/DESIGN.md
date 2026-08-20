@@ -128,6 +128,26 @@ unbroken line yields child == parent and gets none of this. That is the right
 trade for forms, where cutting mid-line is exactly what separated a value from
 its key in the first place, but the benefit is genre-dependent.
 
+**One passage is indexed several times, so `ask` collapses before it answers.**
+A window with three children is reachable three ways, and two of them can rank
+in the same `top_k` — on a real 36-document index a passage is indexed 2.77
+times on average, and 33% of questions were handed at least one passage twice.
+A document that repeats itself adds more: one 482-page book ships its
+appendices twice, so 4.6% of that index is text embedded more than once, with
+byte-identical vectors that tie exactly and are always retrieved together.
+`generate.prepare` therefore over-fetches and keeps one chunk per served
+passage, which frees the slot for something the model has not read.
+
+It collapses on `(path, text)` and never on `index_text`, and both halves of
+that matter. Five monthly payslips share an identity block verbatim while
+serving five different months of figures, so keying on the embedded child would
+drop four months of data; keying on the served text alone would drop the second
+of two files holding the same passage, and with it that file's citation. It
+also lives in `prepare` rather than in `retrieve.search`, because the other two
+callers want the opposite: `find` groups hits by file and wants coverage, and
+`sift search` shows raw index rows for calibrating `--min-score`, which a
+filtered view cannot do.
+
 ---
 
 ## Why the store looks the way it does
