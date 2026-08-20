@@ -24,6 +24,7 @@ from prompt_toolkit.widgets import Frame, TextArea
 from rich.console import Console
 from rich.live import Live
 from rich.padding import Padding
+from rich.progress import Progress, ProgressColumn, SpinnerColumn, TextColumn
 from rich.text import Text
 
 from sift_downloads.config import ConfigError, Settings, get_settings
@@ -174,7 +175,7 @@ class Ui:
         line.append(right, style="dim")
         return line
 
-    def sources(self, chunks: list[dict]) -> None:
+    def sources(self, chunks: list[dict], heading: str = "from") -> None:
         if not chunks:
             return
         self.console.print()
@@ -184,7 +185,7 @@ class Ui:
                    f"[dim](chunk {chunk['chunk_index']}, {chunk['score']:.2f})[/dim]")
             if tag not in seen:
                 seen.append(tag)
-        self.console.print("  [dim]— from —[/dim]")
+        self.console.print(f"  [dim]— {heading} —[/dim]")
         for tag in seen:
             self.console.print(f"    [dim]•[/dim] {tag}")
 
@@ -205,6 +206,14 @@ def _do_find(ui: Ui, request: Request) -> None:
     ui.results(hits, request.argument)
 
 
+class _Seconds(ProgressColumn):
+    """How long we have been waiting, as `4s` — rich's own elapsed column
+    renders `0:00:04`, which is wrong-sized for a wait this short."""
+
+    def render(self, task) -> Text:
+        return Text(f"{int(task.elapsed or 0)}s", style="dim")
+
+
 def _do_ask(ui: Ui, request: Request) -> None:
     from sift_downloads.generate import AnswerStream
 
@@ -220,14 +229,32 @@ def _do_ask(ui: Ui, request: Request) -> None:
         ui.console.print()
         return
 
-    # Stream the answer as it arrives, the way the one-shot CLI cannot.
+    # Retrieval is done, so the filenames exist a long time before the first
+    # token does. Showing them here fills the wait AND puts the grounding
+    # before the claims, which is the honest order for a RAG tool.
+    ui.sources(stream.chunks, heading="reading from")
+
+    # The model call lives in AnswerStream.__iter__ and does not fire until
+    # something asks for an item, so pulling the first token by hand is what
+    # brings it inside a spinner. Stopping the spinner is then the same
+    # instant as having something to show: no blank gap, no double-drawing.
+    tokens = iter(stream)
+    with Progress(SpinnerColumn("dots"), TextColumn("[dim]thinking...[/dim]"),
+                  _Seconds(), console=ui.console, transient=True) as progress:
+        progress.add_task("", total=None)
+        first = next(tokens, None)
+
+    # Stream the rest as it arrives, the way the one-shot CLI cannot.
     # Live re-renders a padded Text rather than appending raw deltas, so
     # wrapped lines keep their indent instead of reflowing to column 0.
     ui.console.print()
     body = Text(style="default")
     with Live(Padding(body, (0, 0, 0, 2)), console=ui.console,
               refresh_per_second=15, vertical_overflow="visible") as live:
-        for delta in stream:
+        if first:
+            body.append(first)
+            live.update(Padding(body, (0, 0, 0, 2)))
+        for delta in tokens:
             body.append(delta)
             live.update(Padding(body, (0, 0, 0, 2)))
 
@@ -235,7 +262,6 @@ def _do_ask(ui: Ui, request: Request) -> None:
         ui.note("(the model returned nothing)")
     answer = stream.finish()
     session.remember("assistant", answer.text)
-    ui.sources(answer.chunks)
     ui.console.print()
 
 
