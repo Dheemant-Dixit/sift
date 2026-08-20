@@ -437,8 +437,8 @@ one day. Calling it the highest-value fix was a guess, and it was wrong.
 
 ```bash
 pip install -e ".[watch,dev]"
-pytest            # 560 tests, ~3s
-pytest evals/     # 17 tests, ~60s — needs Ollama and both default models
+pytest            # ~3s
+pytest evals/     # ~60s — needs Ollama and both default models
 ruff check .
 ```
 

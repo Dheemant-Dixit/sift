@@ -2,7 +2,7 @@
 
 ```bash
 pip install -e ".[watch,dev]"
-pytest                                  # 560 tests, ~3s
+pytest                                  # ~3s
 pytest --cov=sift_downloads --cov-report=term-missing
 ```
 
@@ -54,6 +54,15 @@ Coverage is ~95%, gated at 92% on one job. What is left out, and why:
 Chasing these to 100% would add brittle tests, not confidence.
 
 ## Two conventions worth knowing before you add a test
+
+**No document states how many tests there are.** The count was written into
+four files and every one of them was wrong: `README.md` had frozen at 0.4.0's
+number, this file and `docs/DESIGN.md` at 0.3.0's, and they disagreed with each
+other and with reality at the same time. A figure that changes on most pull
+requests and is checked by nothing rots by default, so the figures are gone
+rather than refreshed. `CHANGELOG.md` is the exception and keeps its counts:
+there they are a frozen record of what a released version shipped, not a claim
+about the suite today. Pinned by `test_no_document_claims_an_exact_test_count`.
 
 **A test that proves an absence must first prove the path ran.** The freshness
 guard defers a just-written file as "still being written", so a sync can report
