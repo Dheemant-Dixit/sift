@@ -44,7 +44,13 @@ from sift_downloads.config import Settings, get_settings, validate_top_k
 # are no longer the same string. A version-1 index has only one, so its vectors
 # describe whole windows while the code now expects them to describe children —
 # scores would be plausible and wrong. It is refused on load instead.
-FORMAT_VERSION = 2
+#
+# 3 enforces `child_min` on every exit from `line_blocks`, so the children of a
+# version-2 index are a different set of strings — 28% of them were under the
+# floor and are now merged into their neighbours. Nothing about a v2 index looks
+# broken, which is the reason to refuse it: a sync is keyed on file mtime, so an
+# unchanged file would keep its stranded children forever.
+FORMAT_VERSION = 3
 
 
 class IndexProblem(Exception):
