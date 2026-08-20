@@ -75,6 +75,24 @@ def ask(indexed_corpus):
 
 
 @pytest.fixture(scope="session")
+def served(indexed_corpus):
+    """The passages the MODEL is handed, after the bar and after collapsing.
+
+    `retrieved` below is the raw store output; this is what `ask` would put in
+    the context block. Same reason it exists separately: it needs only the
+    274MB embedding model, so the duplicate-passage regression stays checkable
+    without the 4.9GB chat one.
+    """
+    from sift_downloads.generate import prepare
+
+    def _served(query: str) -> list[dict]:
+        chunks, _refusal = prepare(query, settings=indexed_corpus)
+        return chunks
+
+    return _served
+
+
+@pytest.fixture(scope="session")
 def retrieved(indexed_corpus):
     """The passages a query actually admits, at the product's own thresholds.
 

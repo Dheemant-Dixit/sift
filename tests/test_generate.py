@@ -311,3 +311,119 @@ def test_streaming_and_non_streaming_refuse_on_exactly_the_same_input(retrieved,
     retrieved["chunks"] = [chunk(score=0.54)]
     configure(min_score=0.55)
     assert answer("q").refused == AnswerStream("q").finish().refused is True
+
+
+# --- one served passage per slot -------------------------------------------
+#
+# A served window is indexed once per child it contains — 2.77 times on a real
+# folder of 4,977 units — and a document that repeats itself is indexed once per
+# repeat: one 482-page book ships its appendices twice. Either way `top_k` slots
+# can be spent on text the model has already read. Measured on a real index, 33%
+# of questions were handed at least one passage twice.
+#
+# The obvious fix is worse than the bug. Collapsing on the EMBEDDED text throws
+# away distinct served passages: five monthly payslips share one identity block
+# verbatim, and each of their parents carries a different month's figures, so
+# deduping on that child drops four months of data. The key is the served
+# passage, never the matched one.
+
+
+def passage(text, child, score, filename="notes.md"):
+    """A retrieved chunk with the two texts small-to-big keeps apart."""
+    return {"filename": filename, "path": f"/src/{filename}",
+            "text": text, "index_text": child, "score": score}
+
+
+def test_the_same_passage_is_never_handed_to_the_model_twice(retrieved):
+    """Two children of one window teach the model nothing on the second read."""
+    retrieved["chunks"] = [passage("PASSAGE ONE", "first half", 0.90),
+               passage("PASSAGE ONE", "second half", 0.80),
+               passage("PASSAGE TWO", "all of it", 0.70)]
+    chunks, refusal = prepare("q", top_k=2)
+    assert refusal is None
+    # The top two rows are BOTH children of PASSAGE ONE, so filling the second
+    # slot means reaching past them: the freed slot is re-spent, not vacated.
+    assert [c["text"] for c in chunks] == ["PASSAGE ONE", "PASSAGE TWO"]
+
+
+def test_passages_sharing_an_embedded_child_are_both_kept(retrieved):
+    """The dangerous half, and the reason the key is `text`.
+
+    These two match on identical text and SERVE different text — the payslip
+    shape, where an identity block is repeated verbatim across months that
+    differ in every figure. Collapsing them loses a month of the user's data.
+    """
+    retrieved["chunks"] = [passage("MARCH: identity block, march figures", "identity block", 0.90,
+                       filename="march.txt"),
+               passage("APRIL: identity block, april figures", "identity block", 0.80,
+                       filename="april.txt")]
+    chunks, _ = prepare("q", top_k=2)
+    assert [c["filename"] for c in chunks] == ["march.txt", "april.txt"], \
+        "a month of payslip data was dropped"
+
+
+def test_the_best_scoring_copy_of_a_passage_is_the_one_kept(retrieved):
+    retrieved["chunks"] = [passage("PASSAGE ONE", "first half", 0.90),
+               passage("PASSAGE ONE", "second half", 0.80)]
+    chunks, _ = prepare("q", top_k=2)
+    assert chunks[0]["score"] == pytest.approx(0.90)
+    assert chunks[0]["index_text"] == "first half"
+
+
+def test_fewer_distinct_passages_than_asked_for_returns_fewer(retrieved):
+    """Under-delivering beats padding with text the model has already read."""
+    retrieved["chunks"] = [passage("PASSAGE ONE", "first half", 0.90),
+               passage("PASSAGE ONE", "second half", 0.80)]
+    chunks, _ = prepare("q", top_k=5)
+    assert len(chunks) == 1
+
+
+def test_collapsed_chunks_are_still_ranked_from_one(retrieved):
+    """Dropping a copy must not leave a hole — `rank` is a position, not an id."""
+    retrieved["chunks"] = [passage("PASSAGE ONE", "first half", 0.90),
+               passage("PASSAGE ONE", "second half", 0.80),
+               passage("PASSAGE TWO", "all of it", 0.70)]
+    chunks, _ = prepare("q", top_k=2)
+    assert [c["rank"] for c in chunks] == [1, 2]
+
+
+def test_the_bar_is_applied_before_passages_are_collapsed(retrieved):
+    """Order matters. Collapsing first spends a slot on a chunk about to be
+    dropped, so a question with two good passages comes back with one."""
+    retrieved["chunks"] = [passage("PASSAGE ONE", "a", 0.90),
+               passage("BELOW THE BAR", "b", 0.40),
+               passage("PASSAGE THREE", "c", 0.80)]
+    chunks, _ = prepare("q", top_k=2, min_score=0.5)
+    assert [c["text"] for c in chunks] == ["PASSAGE ONE", "PASSAGE THREE"]
+
+
+def test_retrieval_is_asked_for_more_rows_than_the_slots_being_filled(monkeypatch):
+    """Collapsing can only re-spend a slot if there were spare rows to spend.
+
+    Asking the store for exactly `top_k` means a question whose top rows are all
+    one passage comes back short instead of reaching further down the ranking.
+    """
+    asked = {}
+
+    def spy(question, top_k=None, min_score=None, settings=None):
+        asked["top_k"] = top_k
+        return [passage("ONE", "a", 0.9)]
+
+    monkeypatch.setattr(generate, "search", spy)
+    prepare("q", top_k=3)
+    assert asked["top_k"] > 3, "no over-fetch: a collapsed slot cannot be refilled"
+
+
+def test_the_same_passage_in_two_files_keeps_both_citations(retrieved):
+    """Deliberate, and the reason the key is (path, text) rather than text.
+
+    Two revisions of one CV hold byte-identical paragraphs — 9 of 101 duplicate
+    groups on a real index. Collapsing those would spend one fewer slot and drop
+    the second file from `Answer.sources`, so the answer would claim one origin
+    for text that has two. A wasted slot is cheaper than a quiet false statement
+    about where an answer came from.
+    """
+    retrieved["chunks"] = [passage("SHARED PARAGRAPH", "a", 0.90, filename="cv_v2.pdf"),
+                           passage("SHARED PARAGRAPH", "a", 0.80, filename="cv_final.pdf")]
+    chunks, _ = prepare("q", top_k=2)
+    assert [c["filename"] for c in chunks] == ["cv_v2.pdf", "cv_final.pdf"]
