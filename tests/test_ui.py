@@ -135,9 +135,16 @@ def test_a_file_with_no_text_shows_why_instead_of_a_snippet(screen):
     assert "no text layer" in screen.read()
 
 
-def test_sources_are_listed_after_an_answer(screen):
+def test_a_source_shows_its_file_chunk_and_score(screen):
     screen.sources([{"filename": "lease.md", "chunk_index": 0, "score": 0.71}])
-    assert "lease.md" in screen.read()
+    assert "lease.md (chunk 0, 0.71)" in screen.read()
+
+
+def test_the_sources_heading_can_be_reworded(screen):
+    """`ask` says "reading from" because it prints the block before the answer."""
+    screen.sources([{"filename": "lease.md", "chunk_index": 0, "score": 0.71}],
+                   heading="reading from")
+    assert "— reading from —" in screen.read()
 
 
 def test_no_sources_block_when_there_are_no_chunks(screen):
@@ -215,6 +222,22 @@ def test_an_answer_is_streamed_and_its_sources_listed(screen, monkeypatch):
     dispatch(screen, Request(UiCommand.ASK, argument="notice period"))
     out = screen.read()
     assert "60 days" in out and "lease.md" in out
+
+
+def test_sources_are_shown_before_the_answer_not_after(screen, monkeypatch):
+    """The filenames are known before the model is called, so they go first.
+
+    Asserting order, not presence: the whole point of the change is *where*
+    the block lands, and a presence check goes green either way.
+    """
+    import sift_downloads.generate as generate
+    chunks = [{"filename": "lease.md", "chunk_index": 0, "score": 0.71}]
+    monkeypatch.setattr(generate, "AnswerStream",
+                        lambda *a, **k: FakeStream(["60 ", "days"], chunks=chunks))
+    dispatch(screen, Request(UiCommand.ASK, argument="notice period"))
+    out = screen.read()
+    assert out.count("lease.md") == 1, "the sources block is printed twice"
+    assert out.index("lease.md") < out.index("60 days")
 
 
 def test_an_empty_answer_is_called_out_rather_than_shown_as_blank(screen, monkeypatch):
