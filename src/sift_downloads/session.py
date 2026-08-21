@@ -224,14 +224,22 @@ class Runner:
         return Verdict.HINT
 
     def leaving(self) -> None:
-        """Ctrl-D was pressed. Whatever is waiting is dropped.
+        """Ctrl-D was pressed. Drop what is waiting, stop what is running.
 
         Nothing can kill the worker thread, so a line still streaming keeps
         going, and the worker's own finally is what starts the QUEUED line.
-        Without this, leaving during an answer makes sift go on to answer the
-        question you abandoned, after you have gone. Measured: it really does.
+        Without dropping the queue, leaving during an answer makes sift go on
+        to answer the question you abandoned, after you have gone. Measured: it
+        really does.
+
+        `cancelled` is the same cooperative flag ctrl-c sets, and it is the
+        same decision made the same way: the running line stops at its next
+        token instead of streaming a whole answer at someone who has left.
+        Measured on a 400-token answer with ctrl-d ~20 tokens in: 400 tokens
+        over 2.49s before, 19 tokens over 0.20s after.
         """
         self.queued = None
+        self.cancelled = True
 
     def _start(self) -> None:
         self.busy = True

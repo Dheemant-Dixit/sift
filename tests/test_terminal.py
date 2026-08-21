@@ -403,10 +403,23 @@ def test_ctrl_c_on_an_empty_idle_box_says_how_to_quit():
 
 
 def test_ctrl_c_while_working_cancels_and_drops_the_queue():
+    """`cancelled` is read WHILE the app runs, not from the wreckage afterwards.
+
+    drive() sends ctrl-d after every test, and ctrl-d also stops the running
+    line - so a flag read at the end of the drive is set by ctrl-d whether or
+    not ctrl-c ever touched it, and the single most important cancellation
+    assertion in this file would go on passing with ctrl-c gutted. Same shape
+    as `alive` in test_ctrl_c_while_idle_with_text_clears_the_box_and_does_not_quit.
+    """
     terminal, painted = a_terminal()
     terminal.start = lambda text: None
-    drive(terminal, ["first\r", "second\r", "\x03"])
-    assert terminal.runner.cancelled is True
+    cancelled = []
+
+    async def look(term):
+        cancelled.append(term.runner.cancelled)
+
+    drive(terminal, ["first\r", "second\r", "\x03"], extra=look)
+    assert cancelled == [True], "ctrl-c did not stop the running line"
     assert terminal.queued_line == ""
     assert "cancelled" in screen_text(painted)
 
@@ -786,6 +799,59 @@ def test_leaving_drops_a_queued_line_instead_of_answering_it_anyway():
     drive(terminal, ["first\r", "second\r"],
           extra=leave_while_the_first_line_is_held)
     assert starts == ["first"], "the queued line was started after the user left"
+
+
+def test_leaving_mid_answer_stops_the_answer_at_the_next_token():
+    """Ctrl-D while an answer is streaming.
+
+    Nothing can kill the worker thread, so the only place it can notice is
+    LiveRegion.append between tokens - the same cooperative path ctrl-c uses.
+    Without it the model streams a whole answer at someone who has already
+    left: measured at 400 tokens over 2.49s, all after the keystroke.
+
+    The worker is let go from INSIDE on_eof rather than on a timer, so it is
+    guaranteed to be sitting between two tokens at the moment ctrl-d lands.
+    A timer would race the loop's own teardown, which calls finished() and
+    puts the flag back down.
+    """
+    terminal, _ = a_terminal()
+    streaming = threading.Event()
+    go_on = threading.Event()
+    tokens = []
+
+    def dispatch(request):
+        terminal.region.append("first token ")
+        tokens.append("first token ")
+        streaming.set()
+        go_on.wait(timeout=2)
+        # 40 one-character tokens: the tail stays well under TAIL_MAX_CHARS, so
+        # nothing here commits and the test cannot park on a loop that has gone.
+        for _ in range(40):
+            terminal.region.append("x")
+            tokens.append("x")
+
+    terminal.dispatch = dispatch
+    real_on_eof = terminal.on_eof
+
+    def on_eof_then_let_the_worker_run():
+        real_on_eof()
+        go_on.set()
+
+    terminal.on_eof = on_eof_then_let_the_worker_run
+
+    async def wait_until_it_is_streaming(term):
+        for _ in range(100):
+            if streaming.is_set():
+                break
+            await asyncio.sleep(0.02)
+
+    try:
+        drive(terminal, ["first\r"], extra=wait_until_it_is_streaming)
+    finally:
+        go_on.set()                 # never leave a worker parked on the gate
+    assert streaming.is_set(), "the answer never started, so nothing was stopped"
+    assert tokens == ["first token "], \
+        f"the answer streamed on after ctrl-d: {len(tokens)} tokens"
 
 
 def test_quit_typed_as_a_word_ends_the_session():

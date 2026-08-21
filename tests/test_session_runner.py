@@ -136,3 +136,13 @@ def test_leaving_drops_the_line_that_was_waiting():
     runner.leaving()
     assert runner.queued is None
     assert runner.finished() is None, "the abandoned line was started anyway"
+
+
+def test_leaving_also_stops_the_line_that_is_running():
+    """Same decision as dropping the queue, made in the same keystroke: nobody
+    who has left wants the rest of the answer. It is the cooperative flag, so
+    it stops the line at its next token, not at once."""
+    runner = Runner()
+    runner.submit("first")
+    runner.leaving()
+    assert runner.cancelled is True

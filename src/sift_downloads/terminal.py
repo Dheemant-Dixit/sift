@@ -388,11 +388,16 @@ class TerminalSession:
         `/quit` - and Application.exit() may only be touched on the loop."""
         if self.app is None:
             return
-        # What leaving means to the queue is session policy, so the runner
-        # decides it - the same rule ctrl-c already goes through interrupt()
-        # for. Only the runner's copy changes: `queued_line` is the string the
-        # box drew, the box is going away, and _work's finally clears it a
-        # moment later.
+        # What leaving means to the queue and to the running line is session
+        # policy, so the runner decides it - the same rule ctrl-c already goes
+        # through interrupt() for. Only the runner's copy changes:
+        # `queued_line` is the string the box drew, the box is going away, and
+        # _work's finally clears it a moment later.
+        #
+        # This bounds the ANSWER, not the wait. LiveRegion.append is the only
+        # place a worker notices, so a model that has not produced its first
+        # token yet, and /sync, run to the end regardless - exactly as they do
+        # for ctrl-c today. It is not "ctrl-d returns immediately".
         self.runner.leaving()
         if self._on_the_loop():
             self.app.exit(result=None)
