@@ -108,10 +108,10 @@ class LiveRegion(Region):
 
     def __init__(self, commit: Callable[[str], None],
                  invalidate: Callable[[], None],
-                 is_cancelled: Callable[[], bool]):
+                 should_stop: Callable[[], bool]):
         self._commit = commit
         self._invalidate = invalidate
-        self._is_cancelled = is_cancelled
+        self._should_stop = should_stop
         self.message = ""
         self.tail = ""
         self._frame = 0
@@ -126,7 +126,7 @@ class LiveRegion(Region):
         self._invalidate()
 
     def append(self, delta: str) -> None:
-        if self._is_cancelled():
+        if self._should_stop():
             raise Cancelled
         self.tail += delta
         while "\n" in self.tail:
@@ -196,8 +196,13 @@ class TerminalSession:
     def __init__(self, ui: Ui):
         self.ui = ui
         self.runner = Runner()
+        # A lambda, not the bound method. `self.runner.should_stop` binds to
+        # THIS Runner forever, so replacing self.runner later would leave the
+        # region asking the dead one - and a dead Runner answers False, which
+        # fails in the "never stop" direction. That is the exact silence
+        # `left` exists to close.
         self.region = LiveRegion(self.commit, self.invalidate,
-                                 self.runner.should_stop)
+                                 lambda: self.runner.should_stop())
         self.queued_line = ""
         self.app: Application | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
