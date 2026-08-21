@@ -72,6 +72,17 @@ def test_the_queue_holds_one_line_again_once_the_first_is_taken():
     assert runner.submit("third") == Verdict.QUEUE
 
 
+def test_going_idle_after_a_cancel_does_not_leave_the_flag_set():
+    """`cancelled` is read by the live region between tokens, so a flag left
+    standing after the line ends would abort the next one for no reason. The
+    queued path is covered by _start(); this is the path that is not."""
+    runner = Runner()
+    runner.submit("first")
+    runner.interrupt("")
+    assert runner.finished() is None        # nothing queued: _start() never runs
+    assert runner.cancelled is False
+
+
 # --- interrupt --------------------------------------------------------------
 
 def test_ctrl_c_while_working_cancels_and_drops_the_queue():
