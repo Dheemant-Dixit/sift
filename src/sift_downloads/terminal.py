@@ -20,7 +20,10 @@ opposite of what README.md:33 promises.
 """
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
+
+from sift_downloads.ui import Region
 
 
 class Cancelled(Exception):
@@ -58,3 +61,89 @@ class Scrollback:
         """False on purpose. The Console is built with force_terminal=True so it
         emits colour, and this keeps rich from deciding it may also animate."""
         return False
+
+
+class LiveRegion(Region):
+    """The rows between your scrollback and the input box.
+
+    Holds at most two things: a status line with a spinner, and the unfinished
+    tail of the answer. A finished line is committed into real scrollback the
+    moment it completes, which is why there is no height cap here and no scroll
+    policy - the region stays paragraph-sized however long the answer is, and
+    the answer lands in scrollback progressively, which is what it does today.
+    """
+
+    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    INDENT = "  "
+    # A model that streams one unbroken paragraph never triggers the newline
+    # commit, and the region would grow until it pushed the box off the screen.
+    # Cut at a space instead, which is what wrapping does anyway.
+    TAIL_MAX_CHARS = 240
+
+    def __init__(self, commit: Callable[[str], None],
+                 invalidate: Callable[[], None],
+                 is_cancelled: Callable[[], bool]):
+        self._commit = commit
+        self._invalidate = invalidate
+        self._is_cancelled = is_cancelled
+        self.message = ""
+        self.tail = ""
+        self._frame = 0
+        self._started = 0.0
+
+    # --- Region ------------------------------------------------------------
+
+    def show(self, message: str) -> None:
+        self.message = message
+        self._started = time.monotonic()
+        self._frame = 0
+        self._invalidate()
+
+    def append(self, delta: str) -> None:
+        if self._is_cancelled():
+            raise Cancelled
+        self.tail += delta
+        while "\n" in self.tail:
+            line, _, self.tail = self.tail.partition("\n")
+            self._commit(self.INDENT + line if line else "")
+        if len(self.tail) > self.TAIL_MAX_CHARS:
+            cut = self.tail.rfind(" ", 0, self.TAIL_MAX_CHARS)
+            if cut > 0:
+                self._commit(self.INDENT + self.tail[:cut])
+                self.tail = self.tail[cut + 1:]
+        self._invalidate()
+
+    def flush(self) -> None:
+        if self.tail:
+            self._commit(self.INDENT + self.tail)
+            self.tail = ""
+        self._invalidate()
+
+    # --- drawing -----------------------------------------------------------
+
+    def tick(self) -> None:
+        """Advance the spinner. Called on a timer while something is running."""
+        if self.message:
+            self._frame += 1
+            self._invalidate()
+
+    def render(self) -> str:
+        """The region, as an ANSI string for prompt_toolkit's ANSI() to parse."""
+        rows = []
+        if self.message:
+            spin = self.FRAMES[self._frame % len(self.FRAMES)]
+            # `4s`, not rich's `0:00:04` - wrong-sized for a wait this short.
+            seconds = int(time.monotonic() - self._started)
+            rows.append(f"\x1b[2m  {spin} {self.message} {seconds}s\x1b[0m")
+        if self.tail:
+            rows.append(self.INDENT + self.tail)
+        return "\n".join(rows)
+
+    def height(self, width: int) -> int:
+        """How many rows the region needs. An inline Application does not grow
+        to fit its content on its own — it has to be told."""
+        rows = 1 if self.message else 0
+        if self.tail:
+            room = max(1, width - len(self.INDENT))
+            rows += -(-len(self.tail) // room)      # ceil
+        return rows
