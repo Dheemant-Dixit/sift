@@ -9,11 +9,19 @@ tests rather than a coverage gap.
 """
 from __future__ import annotations
 
+import asyncio
+import re
+
 import pytest
+from prompt_toolkit.application import create_app_session
 from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.output import DummyOutput
 from rich.console import Console
 
-from sift_downloads.terminal import Cancelled, LiveRegion, Scrollback
+from sift_downloads.session import Session
+from sift_downloads.terminal import Cancelled, LiveRegion, Scrollback, TerminalSession
+from sift_downloads.ui import Ui
 
 # --- the rich -> ANSI bridge ------------------------------------------------
 
@@ -245,3 +253,164 @@ def test_the_spinner_advances_between_repaints():
     first = region.render()
     region.tick()
     assert region.render() != first
+
+
+# --- the Application --------------------------------------------------------
+
+
+def a_terminal():
+    """A TerminalSession, plus the lines it would have painted.
+
+    TerminalSession replaces ui.console with one rendering through Scrollback,
+    so there is no buffer left to read - asserting on a Console handed to Ui()
+    would go permanently empty and the tests would pass by vacuity. `painted` is
+    the real path: rich renders to a string, Scrollback cuts it into lines, and
+    paint() would put each one on the screen.
+    """
+    painted: list[str] = []
+    terminal = TerminalSession(Ui(Session()))
+    terminal.paint = painted.append
+    return terminal, painted
+
+
+def screen_text(painted: list[str]) -> str:
+    """What the user would have seen, with the styling taken back off."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(painted))
+
+
+def drive(terminal, keys, extra=None):
+    """Run the Application headlessly, feeding it `keys`, and return its result."""
+    async def main():
+        with create_pipe_input() as pipe, create_app_session(
+                input=pipe, output=DummyOutput()):
+            app = terminal.build()
+
+            async def typist():
+                await asyncio.sleep(0.02)
+                for chunk in keys:
+                    pipe.send_text(chunk)
+                    await asyncio.sleep(0.02)
+                if extra is not None:
+                    await extra(terminal)
+                pipe.send_text("\x04")          # ctrl-d always ends the test
+                await asyncio.sleep(0.05)
+
+            task = asyncio.create_task(typist())
+            result = await app.run_async()
+            await task
+            return result
+
+    return asyncio.run(main())
+
+
+def test_ctrl_d_on_an_empty_box_ends_the_session():
+    terminal, _ = a_terminal()
+    assert drive(terminal, []) is None
+
+
+def test_a_typed_line_reaches_the_runner_on_enter():
+    terminal, _ = a_terminal()
+    seen = []
+    terminal.start = seen.append
+    drive(terminal, ["notice period\r"])
+    assert seen == ["notice period"]
+    assert terminal.runner.busy is True
+
+
+def test_enter_clears_the_box_so_the_next_question_starts_empty():
+    terminal, _ = a_terminal()
+    terminal.start = lambda text: None
+    drive(terminal, ["notice period\r"])
+    assert terminal.area.text == ""
+
+
+def test_a_second_line_is_shown_as_queued_rather_than_run():
+    terminal, _ = a_terminal()
+    started = []
+    terminal.start = started.append
+    drive(terminal, ["first\r", "second\r"])
+    assert started == ["first"], "the second line must not start a second call"
+    assert terminal.queued_line == "second"
+    assert "second" in terminal.render_queued()
+
+
+def test_a_third_line_is_refused_and_says_so():
+    terminal, painted = a_terminal()
+    terminal.start = lambda text: None
+    drive(terminal, ["first\r", "second\r", "third\r"])
+    assert terminal.queued_line == "second"
+    assert "one at a time" in screen_text(painted)
+
+
+def test_ctrl_c_while_idle_with_text_clears_the_box_and_does_not_quit():
+    terminal, _ = a_terminal()
+    result = drive(terminal, ["half a quest", "\x03"])
+    assert terminal.area.text == ""
+    assert result is None, "ctrl-c must not have ended it - ctrl-d did"
+
+
+def test_ctrl_c_on_an_empty_idle_box_says_how_to_quit():
+    terminal, painted = a_terminal()
+    drive(terminal, ["\x03"])
+    assert "ctrl-d to quit" in screen_text(painted)
+
+
+def test_ctrl_c_while_working_cancels_and_drops_the_queue():
+    terminal, painted = a_terminal()
+    terminal.start = lambda text: None
+    drive(terminal, ["first\r", "second\r", "\x03"])
+    assert terminal.runner.cancelled is True
+    assert terminal.queued_line == ""
+    assert "cancelled" in screen_text(painted)
+
+
+def test_ctrl_d_while_working_still_leaves():
+    terminal, _ = a_terminal()
+    terminal.start = lambda text: None
+    drive(terminal, ["first\r"])       # drive() sends ctrl-d after
+    assert terminal.runner.busy is True
+
+
+def test_the_submitted_line_is_echoed_into_scrollback():
+    """The box no longer erases itself, but Enter clears the text out of it - so
+    what you asked still has to land in scrollback above the answer."""
+    terminal, painted = a_terminal()
+    terminal.start = lambda text: None
+    drive(terminal, ["notice period\r"])
+    assert "notice period" in screen_text(painted)
+
+
+def test_a_committed_line_is_painted_while_the_box_stays_up():
+    terminal, painted = a_terminal()
+
+    async def commit_from_a_worker(term):
+        await asyncio.get_running_loop().run_in_executor(
+            None, term.commit, "\x1b[2m— reading from —\x1b[0m")
+
+    drive(terminal, [], extra=commit_from_a_worker)
+    assert painted == ["\x1b[2m— reading from —\x1b[0m"]
+
+
+def test_the_ui_stops_writing_at_the_terminal_once_the_box_is_up():
+    """Approach C in one assertion. If Ui keeps a Console of its own, ui.note
+    writes past prompt_toolkit's renderer and corrupts the box it is drawing."""
+    terminal, painted = a_terminal()
+    terminal.ui.note("a note")
+    terminal.ui.console.file.flush()
+    assert "a note" in screen_text(painted)
+    assert isinstance(terminal.ui.console.file, Scrollback)
+
+
+def test_commits_from_a_worker_thread_land_in_order():
+    """Byte order is not screen order, so ordering is enforced rather than hoped
+    for: the worker blocks until each line is painted."""
+    terminal, painted = a_terminal()
+
+    async def commit_three(term):
+        def worker():
+            for line in ("sources", "answer", "blank"):
+                term.commit(line)
+        await asyncio.get_running_loop().run_in_executor(None, worker)
+
+    drive(terminal, [], extra=commit_three)
+    assert painted == ["sources", "answer", "blank"]

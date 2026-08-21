@@ -20,10 +20,32 @@ opposite of what README.md:33 promises.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
 from collections.abc import Callable
 
-from sift_downloads.ui import Region
+from prompt_toolkit.application import Application, run_in_terminal
+from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import HSplit, Layout, Window
+from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.shortcuts import print_formatted_text
+from prompt_toolkit.widgets import Frame, TextArea
+from rich.console import Console
+
+from sift_downloads.session import Runner, Verdict
+from sift_downloads.ui import PROMPT_STYLE, Region, Ui
+
+log = logging.getLogger(__name__)
+
+# 15 repaints a second, the same rate rich's Live ran at. This is a constructor
+# argument rather than throttling code: Application.invalidate() is documented
+# thread safe, coalesces repeat calls behind an _invalidated flag, and honours
+# min_redraw_interval.
+REDRAW_INTERVAL = 1 / 15
+SPINNER_INTERVAL = 0.1
 
 
 class Cancelled(Exception):
@@ -157,3 +179,179 @@ class LiveRegion(Region):
             room = max(1, width - len(self.INDENT))
             rows += -(-len(self.tail) // room)      # ceil
         return rows
+
+
+class TerminalSession:
+    """The Application, its layout, and the keys that drive it.
+
+    Deliberately thin. Every decision about what a key means is a call into
+    session.Runner, which is pure and unit-tested; this class reads a key, asks
+    the runner, and does what it says.
+    """
+
+    def __init__(self, ui: Ui):
+        self.ui = ui
+        self.runner = Runner()
+        self.region = LiveRegion(self.commit, self.invalidate,
+                                 lambda: self.runner.cancelled)
+        self.queued_line = ""
+        self.app: Application | None = None
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.area = TextArea(multiline=False, prompt="> ", height=1,
+                             history=InMemoryHistory(), wrap_lines=False)
+
+        # Take the terminal off rich. Every Ui method still renders exactly as
+        # it did - results(), sources() and the score alignment are untouched -
+        # but into a string, which ANSI() parses and prompt_toolkit paints.
+        # Skipping this is not a cosmetic miss: ui.echo and ui.note would write
+        # straight past the renderer, and prompt_toolkit's model of where the
+        # cursor sits is the only reason the box can be redrawn at all.
+        self.ui.region = self.region
+        self.ui.console = Console(file=Scrollback(self.commit),
+                                  force_terminal=True, highlight=False)
+
+    # --- painting ----------------------------------------------------------
+
+    def paint(self, line: str) -> None:
+        """Put one line on the screen. Replaced wholesale in tests."""
+        print_formatted_text(ANSI(line))
+
+    def commit(self, line: str) -> None:
+        """Move one finished line into real scrollback.
+
+        Two callers, two rules, and getting them the same way round deadlocks.
+
+        From the WORKER thread we wait for the paint to happen. That wait is the
+        whole ordering guarantee - prompt_toolkit's renderer is incremental and
+        writes only the cells that changed, so byte order is not screen order
+        and a fire-and-forget version interleaves commits with the streaming
+        tail. run_in_terminal ensure_futures eagerly, so it also has to be
+        *constructed* on the loop thread; hence the wrapper coroutine.
+
+        From the LOOP thread - ui.note("cancelled") out of a key binding, say -
+        waiting is a deadlock: the thing we would be waiting for is us. Schedule
+        and return. Ordering is not at risk there because nothing else is
+        running on the loop at that moment.
+        """
+        if self.loop is None:                       # before the app started
+            self.paint(line)
+            return
+
+        def schedule():
+            return run_in_terminal(lambda: self.paint(line))
+
+        if self._on_the_loop():
+            schedule()
+            return
+
+        async def painter() -> None:
+            await schedule()
+
+        asyncio.run_coroutine_threadsafe(painter(), self.loop).result()
+
+    @staticmethod
+    def _on_the_loop() -> bool:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+        return True
+
+    def invalidate(self) -> None:
+        if self.app is not None:
+            self.app.invalidate()
+
+    def render_queued(self) -> str:
+        if not self.queued_line:
+            return ""
+        return f"\x1b[2m  queued: {self.queued_line}\x1b[0m"
+
+    # --- keys --------------------------------------------------------------
+
+    def start(self, text: str) -> None:
+        """Begin one line of work. Task 6 replaces this with the real worker."""
+
+    def on_enter(self) -> None:
+        text = self.area.text
+        verdict = self.runner.submit(text)
+        if verdict == Verdict.IGNORE:
+            return
+        if verdict == Verdict.REJECT:
+            self.area.text = ""
+            self.ui.note("one at a time — that one is still queued")
+            return
+        self.area.text = ""
+        self.ui.echo(text.strip())
+        if verdict == Verdict.QUEUE:
+            self.queued_line = text
+            self.invalidate()
+            return
+        self.start(text)
+
+    def on_interrupt(self) -> None:
+        verdict = self.runner.interrupt(self.area.text)
+        if verdict == Verdict.CLEAR:
+            self.area.text = ""
+            return
+        if verdict == Verdict.HINT:
+            # The one thing anybody loses is an undocumented exit, with a
+            # visible hint printed in its place on the exact keystroke that
+            # used to take it. /help has always said "leave (or ctrl-d)".
+            self.ui.note("(ctrl-d to quit)")
+            return
+        self.queued_line = ""
+        self.ui.note("cancelled")
+        self.invalidate()
+
+    def on_eof(self) -> None:
+        """End the session. Reached from a key binding AND from the worker, via
+        `/quit` - and Application.exit() may only be touched on the loop."""
+        if self.app is None:
+            return
+        if self._on_the_loop():
+            self.app.exit(result=None)
+        elif self.loop is not None:
+            self.loop.call_soon_threadsafe(self.app.exit, None)
+
+    # --- the Application ---------------------------------------------------
+
+    def build(self) -> Application:
+        bindings = KeyBindings()
+        bindings.add("enter")(lambda event: self.on_enter())
+        bindings.add("c-c")(lambda event: self.on_interrupt())
+
+        @bindings.add("c-d")
+        def _eof(event) -> None:
+            # An empty box only, the way bash and python read it. With text in
+            # the box it would throw away something the user is mid-way through.
+            if not self.area.text:
+                self.on_eof()
+
+        live = Window(
+            FormattedTextControl(lambda: ANSI(self.region.render())),
+            height=lambda: self.region.height(self._width()),
+            dont_extend_height=True,
+        )
+        queued = Window(
+            FormattedTextControl(lambda: ANSI(self.render_queued())),
+            height=lambda: 1 if self.queued_line else 0,
+            dont_extend_height=True,
+        )
+        self.app = Application(
+            layout=Layout(HSplit([live, Frame(HSplit([queued, self.area]),
+                                              title="sift")])),
+            key_bindings=bindings,
+            style=PROMPT_STYLE,
+            full_screen=False,          # scrollback survives; see the docstring
+            mouse_support=False,
+            min_redraw_interval=REDRAW_INTERVAL,
+        )
+        self.loop = asyncio.get_running_loop()
+        # The width is only knowable once there is an output to ask.
+        self.ui.console.width = self._width()
+        return self.app
+
+    def _width(self) -> int:
+        if self.app is None:
+            return 80
+        return self.app.output.get_size().columns
