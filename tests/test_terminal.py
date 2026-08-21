@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import threading
 
 import pytest
 from prompt_toolkit.application import create_app_session
@@ -20,7 +21,13 @@ from prompt_toolkit.output import DummyOutput
 from rich.console import Console
 
 from sift_downloads.session import Session
-from sift_downloads.terminal import Cancelled, LiveRegion, Scrollback, TerminalSession
+from sift_downloads.terminal import (
+    REDRAW_INTERVAL,
+    Cancelled,
+    LiveRegion,
+    Scrollback,
+    TerminalSession,
+)
 from sift_downloads.ui import Ui
 
 # --- the rich -> ANSI bridge ------------------------------------------------
@@ -278,6 +285,13 @@ def screen_text(painted: list[str]) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(painted))
 
 
+# Generous: the whole file runs in ~2s, and no single drive() needs more than
+# the ~0.3s of typing it is given. It exists so a regression FAILS instead of
+# hanging - an Application that never exits freezes pytest with no output at
+# all, which is how this task lost an afternoon once already.
+DRIVE_TIMEOUT = 3.0
+
+
 def drive(terminal, keys, extra=None):
     """Run the Application headlessly, feeding it `keys`, and return its result."""
     async def main():
@@ -296,7 +310,17 @@ def drive(terminal, keys, extra=None):
                 await asyncio.sleep(0.05)
 
             task = asyncio.create_task(typist())
-            result = await app.run_async()
+            try:
+                result = await asyncio.wait_for(app.run_async(),
+                                                timeout=DRIVE_TIMEOUT)
+            except asyncio.TimeoutError:
+                task.cancel()
+                raise AssertionError(
+                    f"the Application was still running {DRIVE_TIMEOUT}s after "
+                    f"the last key. The usual cause is the closing ctrl-d not "
+                    f"reaching on_eof: it only quits an EMPTY box, and the box "
+                    f"holds {terminal.area.text!r}."
+                ) from None
             await task
             return result
 
@@ -353,10 +377,20 @@ def test_a_third_line_is_refused_and_stays_in_the_box():
 
 
 def test_ctrl_c_while_idle_with_text_clears_the_box_and_does_not_quit():
+    """The one behaviour this whole change exists to make: ctrl-c stopped being
+    an exit. It has to be observed WHILE the app runs. drive()'s return value
+    cannot see it - ctrl-c and ctrl-d both exit with result=None, so `result is
+    None` is produced by the bug and by the fix alike.
+    """
     terminal, _ = a_terminal()
-    result = drive(terminal, ["half a quest", "\x03"])
+    alive = []
+
+    async def look(term):
+        alive.append(term.app.is_running)
+
+    drive(terminal, ["half a quest", "\x03"], extra=look)
+    assert alive == [True], "ctrl-c must not have ended the session"
     assert terminal.area.text == ""
-    assert result is None, "ctrl-c must not have ended it - ctrl-d did"
 
 
 def test_ctrl_c_on_an_empty_idle_box_says_how_to_quit():
@@ -411,6 +445,33 @@ def test_the_ui_stops_writing_at_the_terminal_once_the_box_is_up():
     assert isinstance(terminal.ui.console.file, Scrollback)
 
 
+def test_the_region_the_ui_writes_through_is_the_one_that_can_be_cancelled():
+    """The console is only half the swap. Ui builds its own PlainRegion, whose
+    append() just accumulates a string - so if TerminalSession leaves that one
+    in place, ctrl-c during an answer says "cancelled", drops the queue, and the
+    worker streams happily on to the end. Every signal the user gets is a lie.
+    LiveRegion.append is the only place a worker notices a cancellation, so it
+    has to be the region Ui reaches for.
+    """
+    terminal, _ = a_terminal()
+    terminal.runner.cancelled = True
+    with pytest.raises(Cancelled):
+        terminal.ui.region.append("more of an answer nobody wants")
+
+
+def test_the_app_stays_inline_and_throttles_its_repaints():
+    """full_screen=False is not a preference. A full-screen Application swaps to
+    the alternate buffer, so everything sift printed disappears the moment it
+    exits - the opposite of what README.md:33 promises. min_redraw_interval is
+    the repaint throttle: every token appended invalidates, and without it the
+    renderer redraws once per token instead of 15 times a second.
+    """
+    terminal, _ = a_terminal()
+    drive(terminal, [])
+    assert terminal.app.full_screen is False, "the alternate buffer eats scrollback"
+    assert terminal.app.min_redraw_interval == REDRAW_INTERVAL
+
+
 def test_a_worker_commit_does_not_return_until_the_line_is_painted():
     """The blocking .result() in commit()'s worker path, pinned directly.
 
@@ -431,3 +492,63 @@ def test_a_worker_commit_does_not_return_until_the_line_is_painted():
 
     drive(terminal, [], extra=commit_then_look)
     assert seen == [["sources"]], "commit() returned before the paint landed"
+
+
+def test_a_worker_running_its_own_loop_still_waits_for_the_paint():
+    """`_on_the_loop` has to ask "am I on the APP's loop", not "is any loop
+    running in this thread". A worker with a loop of its own answers yes to the
+    loose question and takes the key-binding branch, which breaks both
+    invariants at once: commit() returns before the line is painted, and the
+    paint is scheduled on the worker's loop, so it runs on the worker thread
+    past the renderer that is drawing the box.
+    """
+    terminal, painted = a_terminal()
+    on_loop_thread = threading.current_thread().name
+    seen = []
+    paint_threads = []
+
+    def record(line):
+        paint_threads.append(threading.current_thread().name)
+        painted.append(line)
+
+    terminal.paint = record
+
+    async def commit_from_a_worker_with_a_loop(term):
+        def worker():
+            async def inner():
+                term.commit("sources")
+                seen.append(list(painted))
+            asyncio.run(inner())            # the worker's own event loop
+        await asyncio.get_running_loop().run_in_executor(None, worker)
+
+    drive(terminal, [], extra=commit_from_a_worker_with_a_loop)
+    assert seen == [["sources"]], "commit() returned before the paint landed"
+    assert paint_threads == [on_loop_thread], "the paint ran off the app's loop"
+
+
+def test_a_commit_after_the_loop_closes_still_paints_the_line():
+    """A worker outlives the Application: ctrl-d while busy leaves one
+    streaming, and nothing can kill a thread. Its next commit() therefore
+    arrives at a loop that is closed. Handing that to run_coroutine_threadsafe
+    raises RuntimeError('Event loop is closed') into the worker thread and the
+    line is lost, so commit() falls back to painting directly - the same thing
+    it already does before the app has started.
+    """
+    terminal, painted = a_terminal()
+    dead = asyncio.new_event_loop()
+    dead.close()
+    terminal.loop = dead
+    trouble = []
+
+    def worker():
+        try:
+            terminal.commit("the last of the answer")
+        except Exception as exc:            # catching it IS the assertion
+            trouble.append(repr(exc))
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join(timeout=2)
+    assert not thread.is_alive(), "commit() blocked forever on a dead loop"
+    assert trouble == [], "commit() raised into the worker thread"
+    assert painted == ["the last of the answer"]

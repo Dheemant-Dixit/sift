@@ -21,7 +21,6 @@ opposite of what README.md:33 promises.
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 from collections.abc import Callable
 
@@ -38,14 +37,11 @@ from rich.console import Console
 from sift_downloads.session import Runner, Verdict
 from sift_downloads.ui import PROMPT_STYLE, Region, Ui
 
-log = logging.getLogger(__name__)
-
 # 15 repaints a second, the same rate rich's Live ran at. This is a constructor
 # argument rather than throttling code: Application.invalidate() is documented
 # thread safe, coalesces repeat calls behind an _invalidated flag, and honours
 # min_redraw_interval.
 REDRAW_INTERVAL = 1 / 15
-SPINNER_INTERVAL = 0.1
 
 
 class Cancelled(Exception):
@@ -200,9 +196,12 @@ class TerminalSession:
         self.area = TextArea(multiline=False, prompt="> ", height=1,
                              history=InMemoryHistory(), wrap_lines=False)
 
-        # Take the terminal off rich. Every Ui method still renders exactly as
+        # Take the terminal off rich. Every Ui method still lays out exactly as
         # it did - results(), sources() and the score alignment are untouched -
         # but into a string, which ANSI() parses and prompt_toolkit paints.
+        # Colour is the one thing that does change: highlight=False turns off
+        # rich's guessing at numbers and paths, which the default Console at
+        # ui.py:185 had on. Explicit markup - [dim], [green] - is unaffected.
         # Skipping this is not a cosmetic miss: ui.echo and ui.note would write
         # straight past the renderer, and prompt_toolkit's model of where the
         # cursor sits is the only reason the box can be redrawn at all.
@@ -233,7 +232,13 @@ class TerminalSession:
         and return. Ordering is not at risk there because nothing else is
         running on the loop at that moment.
         """
-        if self.loop is None:                       # before the app started
+        # Before the app starts, and again after it has gone. A worker outlives
+        # the Application - ctrl-d while busy leaves one streaming, and Python
+        # cannot kill a thread - so its next commit() arrives at a closed loop.
+        # Painting straight to the terminal is right in both cases: there is no
+        # renderer left to fight, and the alternative is a RuntimeError raised
+        # into the worker thread and a line the user never sees.
+        if self.loop is None or self.loop.is_closed():
             self.paint(line)
             return
 
@@ -249,13 +254,19 @@ class TerminalSession:
 
         asyncio.run_coroutine_threadsafe(painter(), self.loop).result()
 
-    @staticmethod
-    def _on_the_loop() -> bool:
+    def _on_the_loop(self) -> bool:
+        """Am I on the thread running the app's loop?
+
+        Not "is any loop running here". A worker driving its own loop would
+        answer yes to that, take the non-blocking branch, and lose both
+        guarantees at once: commit() would return before the paint landed, and
+        run_in_terminal would be scheduled on the worker's loop, so the paint
+        would run on the worker thread, past the app's renderer. Silently.
+        """
         try:
-            asyncio.get_running_loop()
+            return asyncio.get_running_loop() is self.loop
         except RuntimeError:
             return False
-        return True
 
     def invalidate(self) -> None:
         if self.app is not None:
