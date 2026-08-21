@@ -217,6 +217,9 @@ class Runner:
             self.queued = None
             return Verdict.CANCEL
         if typed:
+            # Whitespace in the box is still text to clear. submit() strips
+            # instead, because a blank line should not run a query — the two
+            # are different questions and the difference is deliberate.
             return Verdict.CLEAR
         return Verdict.HINT
 

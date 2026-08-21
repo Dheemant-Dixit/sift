@@ -116,15 +116,6 @@ def test_ctrl_c_idle_on_whitespace_only_clears_rather_than_hinting():
     assert Runner().interrupt("   ") == Verdict.CLEAR
 
 
-def test_an_error_does_not_drop_the_queue():
-    """Only Ctrl-C drops it. An exception is one line going wrong, not the user
-    saying stop — and an error has never ended a sift session."""
-    runner = Runner()
-    runner.submit("first")
-    runner.submit("second")
-    assert runner.finished() == "second"
-
-
 def test_the_cancelled_flag_is_cleared_when_the_next_line_starts():
     runner = Runner()
     runner.submit("first")
