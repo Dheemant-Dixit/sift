@@ -306,10 +306,22 @@ class TerminalSession:
         try:
             await self.loop.run_in_executor(None, self._run_one, request)
         finally:
+            # The region ends empty however this line ended. Per-branch tidying
+            # is what left a failed answer's half pinned above the box for the
+            # rest of the session - and the NEXT answer then painted on top of
+            # it, so text from question A appeared inside the answer to
+            # question B with nothing to mark it. That is the attribution shape
+            # this whole tool is careful about, arriving through the UI.
+            #
+            # show("") is a backstop, not dead weight: nothing today shows a
+            # status outside Region.status, whose own finally clears it. A
+            # spinner and a climbing counter over an idle box is a lie, so this
+            # covers the first dispatch path that shows one without a `with`.
+            # It also invalidates, which is why nothing below asks again.
             self.region.show("")
+            self.region.tail = ""
             nxt = self.runner.finished()
             self.queued_line = ""
-            self.invalidate()
             if nxt is not None:
                 self.start(nxt)
 
@@ -322,11 +334,16 @@ class TerminalSession:
             self.dispatch(request)
         except Cancelled:
             # Ctrl-C between tokens. The answer is thrown away; the session is
-            # not. Cancel does not mean stop, it means stop listening.
-            self.region.tail = ""
+            # not. Cancel does not mean stop, it means stop listening. Nothing
+            # to keep here - you asked for the fragment to go.
+            pass
         except (ConfigError, IndexProblem) as e:
+            self.region.flush()
             self.ui.error(str(e).split("\n")[0])
         except Exception as e:              # a bad query must not kill the session
+            # Keep the tokens that did arrive, then say what broke. A partial
+            # answer under an error line is honest; a vanished answer is not.
+            self.region.flush()
             self.ui.error(f"{type(e).__name__}: {e}")
             log.debug("unhandled error in session", exc_info=True)
 

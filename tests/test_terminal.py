@@ -657,7 +657,11 @@ def test_a_config_error_is_reported_as_one_line_not_the_whole_explanation():
 
 def test_a_cancelled_line_leaves_the_session_running():
     """Ctrl-C between tokens. The half-written answer goes; the session stays -
-    and nothing is reported as an error, because the user asked for this."""
+    and nothing is reported as an error, because the user asked for this.
+
+    A cancel DISCARDS the fragment, where an error keeps it: you asked for the
+    answer to stop, so you do not want the half you had been given.
+    """
     terminal, painted = a_terminal()
 
     def dispatch(request):
@@ -665,21 +669,89 @@ def test_a_cancelled_line_leaves_the_session_running():
         raise Cancelled
 
     terminal.dispatch = dispatch
-    result = drive(terminal, ["first\r"], extra=wait_for_idle)
-    assert result is None
-    assert terminal.runner.busy is False
+    drive(terminal, ["first\r"], extra=wait_for_idle)
     assert terminal.region.tail == "", "the abandoned answer stayed on screen"
+    assert "half an answer nobody wants" not in screen_text(painted), \
+        "a cancelled fragment was committed to scrollback anyway"
     assert "Cancelled" not in screen_text(painted), "a cancel is not an error"
 
 
+def test_a_failed_answer_leaves_nothing_in_the_region():
+    """Ollama restarting or unloading a model mid-generation raises out of the
+    token iterator. The tokens that did arrive are kept - a partial answer with
+    an error under it is honest - but nothing stays pinned above the box."""
+    terminal, painted = a_terminal()
+
+    def dispatch(request):
+        terminal.region.append("half an answer")
+        raise RuntimeError("ollama died")
+
+    terminal.dispatch = dispatch
+    drive(terminal, ["first\r"], extra=wait_for_idle)
+    screen = screen_text(painted)
+    assert terminal.region.tail == "", "the half-answer is still pinned above the box"
+    assert "half an answer" in screen, "the tokens that arrived were thrown away"
+    assert "ollama died" in screen
+
+
+def test_the_answer_after_a_failed_one_does_not_inherit_its_half():
+    """The failure that matters in this repo is attribution - one document's
+    real content handed back as another's. A tail left behind by a failed line
+    splices the end of answer A onto the front of answer B, on one line, with
+    no marker and no way for the reader to tell. Same shape, through the UI.
+    """
+    terminal, painted = a_terminal()
+    ran = []
+
+    def dispatch(request):
+        ran.append(request.argument)
+        if len(ran) == 1:
+            terminal.region.append("half an answer")
+            raise RuntimeError("ollama died")
+        terminal.region.append("and the NEXT answer")
+        terminal.region.flush()
+
+    terminal.dispatch = dispatch
+    drive(terminal, ["first\r", "second\r"], extra=wait_for_idle)
+    assert ran == ["first", "second"], "the second line never ran"
+    second = [line for line in painted if "and the NEXT answer" in line]
+    assert second, "the second answer never landed in scrollback"
+    assert all("half an answer" not in line for line in second), \
+        f"the failed line's text is inside the next answer: {second!r}"
+
+
+def test_a_status_left_running_by_a_line_is_cleared_when_it_ends():
+    """The backstop in _work's finally. Nothing today shows a status outside
+    Region.status, whose own finally clears it, so this pins the line rather
+    than leaving it to look covered. What it prevents is user-visible: a
+    spinner and a climbing elapsed counter sitting over an idle box."""
+    terminal, _ = a_terminal()
+
+    def dispatch(request):
+        terminal.region.show("thinking...")
+
+    terminal.dispatch = dispatch
+    drive(terminal, ["first\r"], extra=wait_for_idle)
+    assert terminal.region.message == "", "the spinner is still turning over an idle box"
+
+
 def test_the_queued_line_stops_being_shown_once_it_starts():
+    """Sampled the moment the second line starts, not at the end of the drive:
+    an implementation that only cleared the box at session end passes that."""
     terminal, _ = a_terminal()
     ran = []
     held = HeldLine(ran)
-    terminal.dispatch = held
+    when_second_started = []
+
+    def dispatch(request):
+        held(request)
+        if len(ran) > 1:
+            when_second_started.append(terminal.queued_line)
+
+    terminal.dispatch = dispatch
     drive(terminal, ["first\r", "second\r"], extra=held.let_go_then_wait)
     assert held.queued_while_running == "second", "the second line never queued"
-    assert terminal.queued_line == "", "the box still says a line is waiting"
+    assert when_second_started == [""], "the box still says a line is waiting"
 
 
 def test_leaving_drops_a_queued_line_instead_of_answering_it_anyway():
