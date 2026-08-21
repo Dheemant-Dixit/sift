@@ -332,20 +332,26 @@ class TerminalSession:
 
         try:
             self.dispatch(request)
+            return
         except Cancelled:
             # Ctrl-C between tokens. The answer is thrown away; the session is
             # not. Cancel does not mean stop, it means stop listening. Nothing
             # to keep here - you asked for the fragment to go.
-            pass
+            return
         except (ConfigError, IndexProblem) as e:
-            self.region.flush()
-            self.ui.error(str(e).split("\n")[0])
+            # ConfigError carries a paragraph. One line is what fits above the
+            # box, and it is what ui.py's own loop always did with it.
+            message = str(e).split("\n")[0]
         except Exception as e:              # a bad query must not kill the session
-            # Keep the tokens that did arrive, then say what broke. A partial
-            # answer under an error line is honest; a vanished answer is not.
-            self.region.flush()
-            self.ui.error(f"{type(e).__name__}: {e}")
+            message = f"{type(e).__name__}: {e}"
             log.debug("unhandled error in session", exc_info=True)
+
+        # One exit for both errors, so there is one flush and nothing to leave
+        # unpinned. Keep the tokens that did arrive, then say what broke: a
+        # partial answer with an error under it is honest, a vanished one is
+        # not, and either way the region is empty when the line ends.
+        self.region.flush()
+        self.ui.error(message)
 
     # --- keys --------------------------------------------------------------
 
