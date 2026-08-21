@@ -45,7 +45,9 @@ One file per concern; sections inside marked with `# --- name ---`.
 
 ## Deliberate coverage gaps
 
-Coverage is ~95%, gated at 92% on one job. What is left out, and why:
+Coverage is gated at 92% on one job, and sits comfortably above it. The figure
+is not written down here for the same reason the test count is not: it changes
+on most pull requests and nothing checks it. What is left out, and why:
 
 - **`ui.read_line`** — the one-shot box `_offer_setup` still uses for its
   yes/no prompt. Testing it would prove that prompt_toolkit works.
@@ -57,8 +59,10 @@ Chasing these to 100% would add brittle tests, not confidence.
 `terminal.py` is deliberately *not* on that list. prompt_toolkit ships
 `create_pipe_input()`, `DummyOutput()` and `create_app_session()`, which drive a
 real inline Application with no pty — so the key bindings are tested rather than
-excused. What is left uncovered there is the paint call itself and the spinner's
-timer.
+excused. What is left uncovered there is the paint call itself, two early
+returns that guard against there being no Application yet, and the width
+fallback for the same case — checked against `--cov-report=term-missing`, not
+assumed.
 
 ## Conventions worth knowing before you add a test
 
