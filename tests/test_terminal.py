@@ -334,12 +334,22 @@ def test_a_second_line_is_shown_as_queued_rather_than_run():
     assert "second" in terminal.render_queued()
 
 
-def test_a_third_line_is_refused_and_says_so():
+def test_a_third_line_is_refused_and_stays_in_the_box():
+    """A refusal must not eat your typing. Clearing the box here would also hide
+    the bug: ctrl-d only quits an empty box, so the box staying full is exactly
+    why this test has to empty it by hand before drive() sends ctrl-d."""
     terminal, painted = a_terminal()
     terminal.start = lambda text: None
-    drive(terminal, ["first\r", "second\r", "third\r"])
+    survived = []
+
+    async def look_then_clear(term):
+        survived.append(term.area.text)
+        term.area.text = ""
+
+    drive(terminal, ["first\r", "second\r", "third\r"], extra=look_then_clear)
     assert terminal.queued_line == "second"
     assert "one at a time" in screen_text(painted)
+    assert survived == ["third"], "a refused line must still be there to re-send"
 
 
 def test_ctrl_c_while_idle_with_text_clears_the_box_and_does_not_quit():
@@ -401,16 +411,23 @@ def test_the_ui_stops_writing_at_the_terminal_once_the_box_is_up():
     assert isinstance(terminal.ui.console.file, Scrollback)
 
 
-def test_commits_from_a_worker_thread_land_in_order():
-    """Byte order is not screen order, so ordering is enforced rather than hoped
-    for: the worker blocks until each line is painted."""
-    terminal, painted = a_terminal()
+def test_a_worker_commit_does_not_return_until_the_line_is_painted():
+    """The blocking .result() in commit()'s worker path, pinned directly.
 
-    async def commit_three(term):
+    Asserting that commits merely *arrive* in order proves nothing:
+    run_coroutine_threadsafe is FIFO, so three fire-and-forget commits land in
+    order too. What the wait actually buys is that the worker cannot run ahead
+    of the renderer - so that is what this asserts. Drop the .result() and
+    `painted` is still empty when commit() returns.
+    """
+    terminal, painted = a_terminal()
+    seen = []
+
+    async def commit_then_look(term):
         def worker():
-            for line in ("sources", "answer", "blank"):
-                term.commit(line)
+            term.commit("sources")
+            seen.append(list(painted))
         await asyncio.get_running_loop().run_in_executor(None, worker)
 
-    drive(terminal, [], extra=commit_three)
-    assert painted == ["sources", "answer", "blank"]
+    drive(terminal, [], extra=commit_then_look)
+    assert seen == [["sources"]], "commit() returned before the paint landed"

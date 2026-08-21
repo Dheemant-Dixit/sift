@@ -277,7 +277,9 @@ class TerminalSession:
         if verdict == Verdict.IGNORE:
             return
         if verdict == Verdict.REJECT:
-            self.area.text = ""
+            # The box keeps what you typed. A refusal is "not yet", not "never",
+            # so wiping the line would throw away the very question sift just
+            # told you to ask again in a moment.
             self.ui.note("one at a time — that one is still queued")
             return
         self.area.text = ""
