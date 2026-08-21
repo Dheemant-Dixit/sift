@@ -145,6 +145,34 @@ def test_an_endless_paragraph_is_committed_before_it_pushes_the_box_away():
     assert not committed[0].endswith("wor"), "cut at a space, not mid-word"
 
 
+def test_a_paragraph_with_no_spaces_at_all_is_still_committed():
+    """`rfind` returns -1 when there is nothing to break on. Treating that as
+    "do nothing" lets the region grow forever, which is the exact failure
+    TAIL_MAX_CHARS exists to prevent."""
+    region, committed, _ = a_region()
+    region.append("y" * 400)
+    assert committed
+    assert len(region.tail) <= LiveRegion.TAIL_MAX_CHARS
+
+
+def test_a_leading_space_does_not_wedge_the_cut():
+    """A space at index 0 removes nothing when cut on, and `rfind` reports "not
+    found" as -1. Conflating the two stops the tail shrinking ever again."""
+    region, committed, _ = a_region()
+    region.append(" " + "y" * 400)
+    region.append(" and more text after that")
+    assert committed
+    assert len(region.tail) <= LiveRegion.TAIL_MAX_CHARS
+
+
+def test_the_streaming_tail_is_actually_drawn():
+    """height() counts rows; only render() puts the text on screen. Dropping the
+    tail from render() passes every row-count test in this file."""
+    region, _, _ = a_region()
+    region.append("Security deposit is one hun")
+    assert "Security deposit is one hun" in region.render()
+
+
 def test_appending_asks_for_a_repaint():
     region, _, repaints = a_region()
     region.append("x")

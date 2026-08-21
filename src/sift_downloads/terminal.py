@@ -106,9 +106,19 @@ class LiveRegion(Region):
         while "\n" in self.tail:
             line, _, self.tail = self.tail.partition("\n")
             self._commit(self.INDENT + line if line else "")
-        if len(self.tail) > self.TAIL_MAX_CHARS:
-            cut = self.tail.rfind(" ", 0, self.TAIL_MAX_CHARS)
-            if cut > 0:
+        while len(self.tail) > self.TAIL_MAX_CHARS:
+            # Start at 1, not 0. A space at index 0 is a cut that removes
+            # nothing, and rfind reports "not found" as -1 - so a naive guard
+            # treats a real cut point and no cut point the same way, and the
+            # tail never shrinks again.
+            cut = self.tail.rfind(" ", 1, self.TAIL_MAX_CHARS)
+            if cut < 0:
+                # Nothing to break on. Cut mid-word, which is what wrapping
+                # does to you anyway, and far better than a region that grows
+                # until it pushes the box off the screen.
+                self._commit(self.INDENT + self.tail[:self.TAIL_MAX_CHARS])
+                self.tail = self.tail[self.TAIL_MAX_CHARS:]
+            else:
                 self._commit(self.INDENT + self.tail[:cut])
                 self.tail = self.tail[cut + 1:]
         self._invalidate()
