@@ -92,7 +92,12 @@ Run `sift` on its own. That is the whole tool.
 | `/open 2` `/reveal 2` | opens result 2, or shows it in your file manager |
 | `/find -r invoice` | searches, preferring recently downloaded files |
 | `/sync` `/status` `/help` | update the index, see what's indexed, list commands |
-| `ctrl-d` | quit |
+| `ctrl-c` | stop the answer you are waiting for; it never quits |
+| `ctrl-d` | quit — stops the answer in progress and drops anything queued |
+
+The box stays put while sift works, so you can type the next question without
+waiting. It runs when the current one finishes. One question can wait at a
+time — sift will tell you if you try to stack a third.
 
 The index updates itself when the session starts and whenever you `/sync`, so
 what you downloaded five minutes ago is already searchable.

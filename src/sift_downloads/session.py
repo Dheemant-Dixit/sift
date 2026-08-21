@@ -288,5 +288,6 @@ HELP = [
     ("/sync", "refresh the index now"),
     ("/status", "what's indexed"),
     ("/help", "this list"),
+    ("ctrl-c", "stop the answer you are waiting for"),
     ("/quit", "leave (or ctrl-d)"),
 ]
