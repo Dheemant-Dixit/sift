@@ -68,6 +68,50 @@ def test_clipping_to_a_tiny_room_still_returns_something():
     assert _clip("a very long line indeed", 1)
 
 
+# --- the region seam --------------------------------------------------------
+
+def test_a_plain_status_stays_out_of_scrollback(screen):
+    """A status is transient and scrollback cannot be erased. The startup sync
+    is quiet so it does not push the banner off the screen — printing here
+    breaks that, and the spinner is LiveRegion's job anyway."""
+    before = screen.read()
+    with screen.region.status("searching..."):
+        pass
+    assert screen.read() == before
+
+
+def test_a_plain_region_does_not_accumulate_progress_updates(screen):
+    """`_offer_setup` calls update() once per chunk of a model download. One
+    line each would turn a single pull into hundreds."""
+    before = screen.read()
+    with screen.region.status("downloading...") as status:
+        for done in range(0, 500, 50):
+            status.update(f"llama3.1 — pulling {done}MB / 500MB")
+    assert screen.read() == before
+
+
+def test_a_plain_region_holds_streamed_text_until_it_is_flushed(screen):
+    screen.region.append("60 ")
+    screen.region.append("days")
+    assert "60 days" not in screen.read()
+    screen.region.flush()
+    assert "60 days" in screen.read()
+
+
+def test_flushing_an_empty_region_prints_nothing(screen):
+    before = screen.read()
+    screen.region.flush()
+    assert screen.read() == before
+
+
+def test_streamed_text_keeps_its_indent(screen):
+    """Live was chosen over raw deltas because a wrapped line reflows to column 0
+    and breaks the indent. Whatever replaces it has to keep that."""
+    screen.region.append("a line")
+    screen.region.flush()
+    assert "  a line" in screen.read()
+
+
 # --- chrome -----------------------------------------------------------------
 
 def test_the_banner_names_the_folder_and_the_model(screen):
