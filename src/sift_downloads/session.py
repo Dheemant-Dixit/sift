@@ -159,6 +159,72 @@ class Session:
         return self.last_hits[index - 1].path, ""
 
 
+class Verdict:
+    """What to do about a key. Every one of these is a plain string on purpose:
+    the Application reads a key, asks the Runner, and does what it says."""
+
+    RUN = "run"          # start this line now
+    QUEUE = "queue"      # remember it; run it when the current line finishes
+    REJECT = "reject"    # the queue already holds a line
+    IGNORE = "ignore"    # blank input
+    CANCEL = "cancel"    # stop listening to the running line, drop the queue
+    CLEAR = "clear"      # wipe the input box
+    HINT = "hint"        # say how to quit
+
+
+@dataclass
+class Runner:
+    """Whether sift is working, what is waiting, and whether to stop listening.
+
+    Cancellation is cooperative and `cancelled` is the whole of it. Ctrl-C in a
+    persistent Application arrives as byte 0x03 through a key binding — no
+    SIGINT is sent to anyone, and Python cannot kill a thread. So a cancelled
+    line keeps running; `busy` stays True until it really ends, which is what
+    stops sift ever having two Ollama calls in flight.
+    """
+
+    busy: bool = False
+    queued: str | None = None
+    cancelled: bool = False
+
+    def submit(self, text: str) -> str:
+        """Enter was pressed."""
+        if not text.strip():
+            return Verdict.IGNORE
+        if not self.busy:
+            self._start()
+            return Verdict.RUN
+        if self.queued is None:
+            self.queued = text
+            return Verdict.QUEUE
+        # One pending line, not a backlog. Replacing it would silently throw
+        # away something the user watched themselves type.
+        return Verdict.REJECT
+
+    def finished(self) -> str | None:
+        """A line ended — completed, failed or abandoned. Returns the next one."""
+        self.busy = False
+        self.cancelled = False
+        nxt, self.queued = self.queued, None
+        if nxt is not None:
+            self._start()
+        return nxt
+
+    def interrupt(self, typed: str) -> str:
+        """Ctrl-C was pressed. Never quits — that is ctrl-d's job."""
+        if self.busy:
+            self.cancelled = True
+            self.queued = None
+            return Verdict.CANCEL
+        if typed:
+            return Verdict.CLEAR
+        return Verdict.HINT
+
+    def _start(self) -> None:
+        self.busy = True
+        self.cancelled = False
+
+
 HELP = [
     ("<anything>", "search your files for it"),
     ("?<question>", "ask a question, answered from your files"),
