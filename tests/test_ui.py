@@ -531,17 +531,18 @@ def test_ctrl_c_during_the_download_returns_to_the_session(screen, offer, monkey
     assert "resume" in screen.read().lower()
 
 
-def test_the_session_offers_setup_before_it_tries_to_sync(monkeypatch, capsys):
+def test_the_session_offers_setup_before_it_tries_to_sync(monkeypatch):
     """Order is the whole point: the sync is what fails without models.
 
-    `run()` is otherwise untested here — with read_line stubbed this asserts the
-    wiring, not prompt_toolkit.
+    Both of those run BEFORE the Application starts, which is why read_line and
+    the plain rich console survive untouched for that phase.
     """
     from sift_downloads.config import get_settings
     done: list[str] = []
     monkeypatch.setattr(ui_module, "_offer_setup", lambda ui: done.append("offer"))
     monkeypatch.setattr(ui_module, "_do_sync", lambda ui, quiet=False: done.append("sync"))
-    monkeypatch.setattr(ui_module, "read_line", lambda *a, **k: None)
+    monkeypatch.setattr(ui_module, "_start_terminal",
+                        lambda ui: done.append("terminal") or 0)
 
     assert ui_module.run(get_settings()) == 0
-    assert done == ["offer", "sync"]
+    assert done == ["offer", "sync", "terminal"]

@@ -29,7 +29,7 @@ from rich.text import Text
 
 from sift_downloads.config import ConfigError, Settings, get_settings
 from sift_downloads.humanize import MATCH_MARKER, human_age, human_size
-from sift_downloads.session import HELP, Request, Session, UiCommand, parse
+from sift_downloads.session import HELP, Request, Session, UiCommand
 from sift_downloads.store import IndexProblem
 
 log = logging.getLogger(__name__)
@@ -493,8 +493,20 @@ def dispatch(ui: Ui, request: Request) -> bool:
 # The loop
 # ---------------------------------------------------------------------------
 
+def _start_terminal(ui: Ui) -> int:
+    """Imported here, not at module scope: terminal.py imports this module."""
+    from sift_downloads.terminal import run_session
+
+    return run_session(ui)
+
+
 def run(settings: Settings | None = None) -> int:
-    """Start an interactive session. Returns a process exit code."""
+    """Start an interactive session. Returns a process exit code.
+
+    Everything before the Application starts still uses the plain rich console
+    and the one-shot read_line: banner, the first-run offer and the first sync
+    all happen while nothing owns the terminal yet.
+    """
     settings = settings or get_settings()
     session = Session(settings=settings)
     ui = Ui(session)
@@ -503,32 +515,6 @@ def run(settings: Settings | None = None) -> int:
     _offer_setup(ui)
     _do_sync(ui, quiet=True)
 
-    history = InMemoryHistory()
-    while True:
-        try:
-            line = read_line(history)
-        except (EOFError, KeyboardInterrupt):
-            break
-        if line is None:            # ctrl-c / ctrl-d in the box
-            break
-
-        request = parse(line)
-        if request.command == UiCommand.NOTHING:
-            continue
-        ui.echo(line.strip())
-
-        try:
-            if not dispatch(ui, request):
-                break
-        except KeyboardInterrupt:
-            # Interrupting a slow query returns you to the prompt; it doesn't
-            # end the session. Only the empty box exits.
-            ui.note("cancelled")
-        except (ConfigError, IndexProblem) as e:
-            ui.error(str(e).split("\n")[0])
-        except Exception as e:      # a bad query must not kill the session
-            ui.error(f"{type(e).__name__}: {e}")
-            log.debug("unhandled error in session", exc_info=True)
-
+    code = _start_terminal(ui)
     ui.console.print("  [dim]bye[/dim]")
-    return 0
+    return code

@@ -21,6 +21,7 @@ opposite of what README.md:33 promises.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable
 
@@ -34,14 +35,21 @@ from prompt_toolkit.shortcuts import print_formatted_text
 from prompt_toolkit.widgets import Frame, TextArea
 from rich.console import Console
 
-from sift_downloads.session import Runner, Verdict
+from sift_downloads.session import Request, Runner, Verdict, parse
 from sift_downloads.ui import PROMPT_STYLE, Region, Ui
+
+log = logging.getLogger(__name__)
 
 # 15 repaints a second, the same rate rich's Live ran at. This is a constructor
 # argument rather than throttling code: Application.invalidate() is documented
 # thread safe, coalesces repeat calls behind an _invalidated flag, and honours
 # min_redraw_interval.
 REDRAW_INTERVAL = 1 / 15
+# The spinner is the only sign of life while a model reads your files, and
+# nothing else asks for that repaint - a model thinking for twenty seconds emits
+# no tokens, so no append() invalidates. Ten frames a second, under the redraw
+# throttle, so a tick can never cost more than one paint.
+SPINNER_INTERVAL = 1 / 10
 
 
 class Cancelled(Exception):
@@ -277,10 +285,52 @@ class TerminalSession:
             return ""
         return f"\x1b[2m  queued: {self.queued_line}\x1b[0m"
 
-    # --- keys --------------------------------------------------------------
+    # --- the worker --------------------------------------------------------
+
+    def dispatch(self, request: Request) -> None:
+        """Run one request. Replaced in tests; ui.dispatch does the real work."""
+        from sift_downloads import ui as ui_module
+
+        if not ui_module.dispatch(self.ui, request):
+            self.on_eof()
 
     def start(self, text: str) -> None:
-        """Begin one line of work. Task 6 replaces this with the real worker."""
+        """Send one line to the worker. Returns at once - the box stays live."""
+        request = parse(text)
+        if self.loop is None:                       # pragma: no cover
+            return
+        self.loop.create_task(self._work(request))
+
+    async def _work(self, request: Request) -> None:
+        assert self.loop is not None
+        try:
+            await self.loop.run_in_executor(None, self._run_one, request)
+        finally:
+            self.region.show("")
+            nxt = self.runner.finished()
+            self.queued_line = ""
+            self.invalidate()
+            if nxt is not None:
+                self.start(nxt)
+
+    def _run_one(self, request: Request) -> None:
+        """The blocking half, on a worker thread."""
+        from sift_downloads.config import ConfigError
+        from sift_downloads.store import IndexProblem
+
+        try:
+            self.dispatch(request)
+        except Cancelled:
+            # Ctrl-C between tokens. The answer is thrown away; the session is
+            # not. Cancel does not mean stop, it means stop listening.
+            self.region.tail = ""
+        except (ConfigError, IndexProblem) as e:
+            self.ui.error(str(e).split("\n")[0])
+        except Exception as e:              # a bad query must not kill the session
+            self.ui.error(f"{type(e).__name__}: {e}")
+            log.debug("unhandled error in session", exc_info=True)
+
+    # --- keys --------------------------------------------------------------
 
     def on_enter(self) -> None:
         text = self.area.text
@@ -321,6 +371,14 @@ class TerminalSession:
         `/quit` - and Application.exit() may only be touched on the loop."""
         if self.app is None:
             return
+        # Leaving drops whatever was waiting. Nothing can kill the worker
+        # thread, so a line still streaming keeps going and its finally still
+        # runs - and that finally is what starts the QUEUED line. Without this,
+        # ctrl-d during an answer makes sift go on to answer the question you
+        # abandoned, after you have gone. Measured: it really does run.
+        # Only the runner's copy: `queued_line` is the string the box drew, the
+        # box is going away, and _work's finally clears it a moment later.
+        self.runner.queued = None
         if self._on_the_loop():
             self.app.exit(result=None)
         elif self.loop is not None:
@@ -368,3 +426,44 @@ class TerminalSession:
         if self.app is None:
             return 80
         return self.app.output.get_size().columns
+
+    # --- running -----------------------------------------------------------
+
+    def run_forever(self) -> int:
+        """Own the terminal until the user leaves."""
+        try:
+            self._run()
+        finally:
+            # Drop the loop on the way out. commit() paints directly when the
+            # loop is None or closed, and a loop that has STOPPED is neither -
+            # is_closed() is still False, so a worker still streaming would
+            # wait on .result() for a loop that never turns again. Forever,
+            # silently, with nothing on screen. None puts it back on the same
+            # direct path it uses before the app starts.
+            self.loop = None
+        return 0
+
+    def _run(self) -> None:
+        """The run itself, kept separate so a test can leave a loop STOPPED but
+        not closed behind. asyncio.run always closes the loop it made, so the
+        state the finally above exists for cannot be reached through it."""
+        asyncio.run(self._main())
+
+    async def _main(self) -> None:
+        app = self.build()
+        ticker = asyncio.create_task(self._tick())
+        try:
+            await app.run_async()
+        finally:
+            ticker.cancel()
+
+    async def _tick(self) -> None:
+        """Turn the spinner. The only repaint nothing else asks for."""
+        while True:
+            await asyncio.sleep(SPINNER_INTERVAL)
+            self.region.tick()
+
+
+def run_session(ui: Ui) -> int:
+    """Hand the terminal to a persistent Application until the user leaves."""
+    return TerminalSession(ui).run_forever()

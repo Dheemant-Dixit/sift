@@ -20,13 +20,16 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 from rich.console import Console
 
+from sift_downloads.config import ConfigError
 from sift_downloads.session import Session
 from sift_downloads.terminal import (
     REDRAW_INTERVAL,
+    SPINNER_INTERVAL,
     Cancelled,
     LiveRegion,
     Scrollback,
     TerminalSession,
+    run_session,
 )
 from sift_downloads.ui import Ui
 
@@ -552,3 +555,267 @@ def test_a_commit_after_the_loop_closes_still_paints_the_line():
     assert not thread.is_alive(), "commit() blocked forever on a dead loop"
     assert trouble == [], "commit() raised into the worker thread"
     assert painted == ["the last of the answer"]
+
+
+# --- the worker -------------------------------------------------------------
+
+async def wait_for_idle(terminal, tries=100):
+    for _ in range(tries):
+        if not terminal.runner.busy:
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("the worker never finished")
+
+
+class HeldLine:
+    """A dispatch that holds the FIRST line open until it is let go.
+
+    Every queue test needs it. `busy` is set the moment Enter is pressed and
+    cleared by _work's finally, so a dispatch that returns straight away leaves
+    the runner idle again before the second line is typed - and the second line
+    then takes the plain RUN path. The tests still pass, from the wrong cause;
+    coverage is what gives it away, because `self.start(nxt)` is never reached.
+    An Event pair rather than a sleep: the point is ordering, not duration.
+    """
+
+    def __init__(self, ran, boom=None):
+        self.ran = ran
+        self.boom = boom
+        self.running = threading.Event()
+        self.release = threading.Event()
+        self.queued_while_running = None
+
+    def __call__(self, request):
+        self.ran.append(request.argument or "?")
+        if len(self.ran) > 1:
+            return
+        self.running.set()
+        self.release.wait(timeout=2)
+        if self.boom is not None:
+            raise self.boom
+
+    async def let_go_then_wait(self, terminal):
+        """drive()'s `extra`: unblock the first line, then wait for the queue."""
+        for _ in range(100):
+            if self.running.is_set():
+                break
+            await asyncio.sleep(0.02)
+        self.queued_while_running = terminal.queued_line
+        self.release.set()
+        await wait_for_idle(terminal)
+
+
+def test_a_line_is_dispatched_off_the_event_loop():
+    """litellm and Ollama block. Running them on the loop freezes the box, which
+    is the thing this whole change exists to prevent."""
+    terminal, _ = a_terminal()
+    threads = []
+    terminal.dispatch = lambda request: threads.append(threading.current_thread())
+    drive(terminal, ["notice period\r"], extra=wait_for_idle)
+    assert threads and threads[0] is not threading.current_thread()
+
+
+def test_a_queued_line_runs_when_the_first_one_ends():
+    terminal, _ = a_terminal()
+    ran = []
+    held = HeldLine(ran)
+    terminal.dispatch = held
+    drive(terminal, ["first\r", "second\r"], extra=held.let_go_then_wait)
+    assert held.queued_while_running == "second", "the second line never queued"
+    assert ran == ["first", "second"]
+
+
+def test_a_queued_line_still_runs_after_the_first_one_fails():
+    """An error has never ended a sift session and should not start now. Only
+    Ctrl-C drops the queue - an exception is one line going wrong."""
+    terminal, painted = a_terminal()
+    ran = []
+    held = HeldLine(ran, boom=RuntimeError("ollama said no"))
+    terminal.dispatch = held
+    drive(terminal, ["first\r", "second\r"], extra=held.let_go_then_wait)
+    assert held.queued_while_running == "second", "the second line never queued"
+    assert ran == ["first", "second"]
+    assert "ollama said no" in screen_text(painted)
+
+
+def test_a_config_error_is_reported_as_one_line_not_the_whole_explanation():
+    """ConfigError carries a paragraph - the consent refusal names the models,
+    then what to do about it. One line is what fits above the box, and it is
+    what ui.py's own loop always did with it."""
+    terminal, painted = a_terminal()
+
+    def dispatch(request):
+        raise ConfigError("cloud models configured without consent\n"
+                          "re-run with --allow-cloud")
+
+    terminal.dispatch = dispatch
+    drive(terminal, ["first\r"], extra=wait_for_idle)
+    screen = screen_text(painted)
+    assert "cloud models configured without consent" in screen
+    assert "--allow-cloud" not in screen, "the whole paragraph landed in the region"
+
+
+def test_a_cancelled_line_leaves_the_session_running():
+    """Ctrl-C between tokens. The half-written answer goes; the session stays -
+    and nothing is reported as an error, because the user asked for this."""
+    terminal, painted = a_terminal()
+
+    def dispatch(request):
+        terminal.region.tail = "half an answer nobody wants"
+        raise Cancelled
+
+    terminal.dispatch = dispatch
+    result = drive(terminal, ["first\r"], extra=wait_for_idle)
+    assert result is None
+    assert terminal.runner.busy is False
+    assert terminal.region.tail == "", "the abandoned answer stayed on screen"
+    assert "Cancelled" not in screen_text(painted), "a cancel is not an error"
+
+
+def test_the_queued_line_stops_being_shown_once_it_starts():
+    terminal, _ = a_terminal()
+    ran = []
+    held = HeldLine(ran)
+    terminal.dispatch = held
+    drive(terminal, ["first\r", "second\r"], extra=held.let_go_then_wait)
+    assert held.queued_while_running == "second", "the second line never queued"
+    assert terminal.queued_line == "", "the box still says a line is waiting"
+
+
+def test_leaving_drops_a_queued_line_instead_of_answering_it_anyway():
+    """Ctrl-D during an answer cannot stop the worker - nothing can kill a
+    thread - and the worker's own finally is what starts the queued line. So
+    leaving has to drop the queue, or sift goes on to answer the question you
+    abandoned, after you have gone. Measured before the guard existed: it did.
+    """
+    terminal, _ = a_terminal()
+    ran = []
+    held = HeldLine(ran)
+    terminal.dispatch = held
+    starts = []
+    real_start = terminal.start
+
+    def counting_start(text):
+        starts.append(text)
+        real_start(text)
+
+    terminal.start = counting_start
+
+    async def leave_while_the_first_line_is_held(term):
+        for _ in range(100):
+            if held.running.is_set():
+                break
+            await asyncio.sleep(0.02)
+        # drive() sends ctrl-d next. The first line is let go only afterwards,
+        # so its finally runs with the session already over - which is the
+        # whole point, and why this is a Timer and not a release here.
+        threading.Timer(0.2, held.release.set).start()
+
+    drive(terminal, ["first\r", "second\r"],
+          extra=leave_while_the_first_line_is_held)
+    assert starts == ["first"], "the queued line was started after the user left"
+
+
+def test_quit_typed_as_a_word_ends_the_session():
+    """`/quit` ends the session from the WORKER thread, so app.exit() has to be
+    handed back to the loop. drive() sends ctrl-d after every test and that ends
+    the app on its own, so the exit has to be watched for while extra still has
+    the run - the return value cannot tell the two apart.
+    """
+    terminal, _ = a_terminal()
+    alive = []
+
+    async def wait_then_look(term):
+        await wait_for_idle(term)
+        for _ in range(50):
+            if not term.app.is_running:
+                break
+            await asyncio.sleep(0.02)
+        alive.append(term.app.is_running)
+
+    assert drive(terminal, ["/quit\r"], extra=wait_then_look) is None
+    assert alive == [False], "/quit left the session running"
+
+
+def test_the_ticker_turns_the_spinner_with_nothing_else_happening():
+    """Nothing else asks for that repaint. append() invalidates on a token, and a
+    model that spends twenty seconds reading your files emits none.
+
+    Watch the FRAME, not the whole rendered line: the line also carries the
+    elapsed seconds, which roll over on their own after a second and make a
+    ticker that does nothing at all look like it is working.
+    """
+    terminal, _ = a_terminal()
+    terminal.region.show("thinking...")
+    still = LiveRegion.FRAMES[0]
+    assert still in terminal.region.render()
+
+    async def main():
+        ticker = asyncio.create_task(terminal._tick())
+        for _ in range(20):
+            await asyncio.sleep(SPINNER_INTERVAL)
+            if still not in terminal.region.render():
+                break
+        ticker.cancel()
+
+    asyncio.run(main())
+    assert still not in terminal.region.render(), "the spinner never turned"
+
+
+def test_a_worker_commit_after_the_run_ends_neither_hangs_nor_is_lost():
+    """A loop that has STOPPED but is not yet closed.
+
+    commit() paints straight to the terminal when the loop is None or closed. A
+    stopped loop is neither - is_closed() is False - so a worker commit() hands
+    its line to run_coroutine_threadsafe and then waits on a loop that will
+    never turn again. Forever, silently, with nothing on screen. So the run
+    drops its reference to the loop on the way out, which puts commit() back on
+    the paint-directly path it already uses before the app starts.
+
+    build() is stubbed because asyncio.run always closes the loop it made, so
+    the real one cannot leave this state behind to be tested.
+    """
+    terminal, painted = a_terminal()
+    stopped = asyncio.new_event_loop()          # never ran, and NOT closed
+
+    class FinishedApp:
+        async def run_async(self):
+            return None
+
+    def build_leaving_a_stopped_loop():
+        terminal.loop = stopped
+        terminal.app = FinishedApp()
+        return terminal.app
+
+    terminal.build = build_leaving_a_stopped_loop
+    try:
+        assert terminal.run_forever() == 0
+
+        done = threading.Event()
+
+        def worker():
+            terminal.commit("the last of the answer")
+            done.set()
+
+        # daemon, so a regression fails the assertion below instead of wedging
+        # the whole run: a thread parked in .result() never comes back.
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        thread.join(timeout=2)
+        assert done.is_set(), "commit() is still waiting on a loop that has stopped"
+        assert painted == ["the last of the answer"], "the line was lost"
+        assert terminal.loop is None
+    finally:
+        stopped.close()
+
+
+def test_run_session_hands_over_the_ui_the_caller_already_has(monkeypatch):
+    """TerminalSession replaces the console and region ON the Ui it is given. A
+    second Ui built here would leave ui.py's original one writing straight at
+    the terminal, past the renderer drawing the box."""
+    seen = []
+    monkeypatch.setattr(TerminalSession, "run_forever",
+                        lambda self: seen.append(self.ui) or 7)
+    ui = Ui(Session())
+    assert run_session(ui) == 7
+    assert seen == [ui]
