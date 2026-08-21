@@ -546,3 +546,19 @@ def test_the_session_offers_setup_before_it_tries_to_sync(monkeypatch):
 
     assert ui_module.run(get_settings()) == 0
     assert done == ["offer", "sync", "terminal"]
+
+
+def test_the_session_really_reaches_the_terminal_module(monkeypatch):
+    """The one function whose entire job is the import direction, and the only
+    place it is executed. Every other test stubs `_start_terminal` out, so
+    renaming `run_session` in terminal.py used to leave the whole suite green
+    while every real session died at startup on the ImportError.
+    """
+    from sift_downloads import terminal as terminal_module
+
+    seen = []
+    monkeypatch.setattr(terminal_module, "run_session",
+                        lambda ui: seen.append(ui) or 3)
+    ui = Ui(Session())
+    assert ui_module._start_terminal(ui) == 3
+    assert seen == [ui], "the caller's Ui was not the one handed over"

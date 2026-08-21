@@ -123,3 +123,16 @@ def test_the_cancelled_flag_is_cleared_when_the_next_line_starts():
     runner.submit("second")            # queued behind the abandoned thread
     runner.finished()
     assert runner.cancelled is False, "the new line must not start pre-cancelled"
+
+
+def test_leaving_drops_the_line_that_was_waiting():
+    """Ctrl-D. The worker's own finally is what starts the queued line, and
+    nothing can kill that thread - so if the queue survives, sift answers the
+    question you abandoned after you have gone."""
+    runner = Runner()
+    runner.submit("first")
+    runner.submit("second")
+    assert runner.queued == "second"
+    runner.leaving()
+    assert runner.queued is None
+    assert runner.finished() is None, "the abandoned line was started anyway"

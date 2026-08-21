@@ -388,14 +388,12 @@ class TerminalSession:
         `/quit` - and Application.exit() may only be touched on the loop."""
         if self.app is None:
             return
-        # Leaving drops whatever was waiting. Nothing can kill the worker
-        # thread, so a line still streaming keeps going and its finally still
-        # runs - and that finally is what starts the QUEUED line. Without this,
-        # ctrl-d during an answer makes sift go on to answer the question you
-        # abandoned, after you have gone. Measured: it really does run.
-        # Only the runner's copy: `queued_line` is the string the box drew, the
-        # box is going away, and _work's finally clears it a moment later.
-        self.runner.queued = None
+        # What leaving means to the queue is session policy, so the runner
+        # decides it - the same rule ctrl-c already goes through interrupt()
+        # for. Only the runner's copy changes: `queued_line` is the string the
+        # box drew, the box is going away, and _work's finally clears it a
+        # moment later.
+        self.runner.leaving()
         if self._on_the_loop():
             self.app.exit(result=None)
         elif self.loop is not None:
@@ -449,7 +447,7 @@ class TerminalSession:
     def run_forever(self) -> int:
         """Own the terminal until the user leaves."""
         try:
-            self._run()
+            asyncio.run(self._main())
         finally:
             # Drop the loop on the way out. commit() paints directly when the
             # loop is None or closed, and a loop that has STOPPED is neither -
@@ -459,12 +457,6 @@ class TerminalSession:
             # direct path it uses before the app starts.
             self.loop = None
         return 0
-
-    def _run(self) -> None:
-        """The run itself, kept separate so a test can leave a loop STOPPED but
-        not closed behind. asyncio.run always closes the loop it made, so the
-        state the finally above exists for cannot be reached through it."""
-        asyncio.run(self._main())
 
     async def _main(self) -> None:
         app = self.build()

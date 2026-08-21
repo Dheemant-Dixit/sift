@@ -223,6 +223,16 @@ class Runner:
             return Verdict.CLEAR
         return Verdict.HINT
 
+    def leaving(self) -> None:
+        """Ctrl-D was pressed. Whatever is waiting is dropped.
+
+        Nothing can kill the worker thread, so a line still streaming keeps
+        going, and the worker's own finally is what starts the QUEUED line.
+        Without this, leaving during an answer makes sift go on to answer the
+        question you abandoned, after you have gone. Measured: it really does.
+        """
+        self.queued = None
+
     def _start(self) -> None:
         self.busy = True
         self.cancelled = False
