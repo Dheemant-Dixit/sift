@@ -197,7 +197,7 @@ class TerminalSession:
         self.ui = ui
         self.runner = Runner()
         self.region = LiveRegion(self.commit, self.invalidate,
-                                 lambda: self.runner.cancelled)
+                                 self.runner.should_stop)
         self.queued_line = ""
         self.app: Application | None = None
         self.loop: asyncio.AbstractEventLoop | None = None

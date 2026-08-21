@@ -176,16 +176,23 @@ class Verdict:
 class Runner:
     """Whether sift is working, what is waiting, and whether to stop listening.
 
-    Cancellation is cooperative and `cancelled` is the whole of it. Ctrl-C in a
-    persistent Application arrives as byte 0x03 through a key binding — no
-    SIGINT is sent to anyone, and Python cannot kill a thread. So a cancelled
-    line keeps running; `busy` stays True until it really ends, which is what
-    stops sift ever having two Ollama calls in flight.
+    Cancellation is cooperative. Ctrl-C in a persistent Application arrives as
+    byte 0x03 through a key binding — no SIGINT is sent to anyone, and Python
+    cannot kill a thread. So a cancelled line keeps running; `busy` stays True
+    until it really ends, which is what stops sift ever having two Ollama calls
+    in flight.
+
+    Two flags say "stop", and they have different lifetimes. `cancelled` is
+    about one line: ctrl-c stops this answer and the session carries on, so
+    finished() puts it back down. `left` is about the session: once the user
+    has gone, nothing should ever put it down again. Ask should_stop() rather
+    than reading either one.
     """
 
     busy: bool = False
     queued: str | None = None
     cancelled: bool = False
+    left: bool = False
 
     def submit(self, text: str) -> str:
         """Enter was pressed."""
@@ -202,7 +209,14 @@ class Runner:
         return Verdict.REJECT
 
     def finished(self) -> str | None:
-        """A line ended — completed, failed or abandoned. Returns the next one."""
+        """A line ended — completed, failed or abandoned. Returns the next one.
+
+        `left` is deliberately not cleared here. asyncio.run's teardown cancels
+        the pending task and this runs from its finally, while the worker
+        thread it was waiting on is still streaming — so clearing the stop flag
+        here hands that worker a clean slate and it finishes the answer at
+        someone who has already gone.
+        """
         self.busy = False
         self.cancelled = False
         nxt, self.queued = self.queued, None
@@ -232,14 +246,32 @@ class Runner:
         to answer the question you abandoned, after you have gone. Measured: it
         really does.
 
-        `cancelled` is the same cooperative flag ctrl-c sets, and it is the
-        same decision made the same way: the running line stops at its next
-        token instead of streaming a whole answer at someone who has left.
-        Measured on a 400-token answer with ctrl-d ~20 tokens in: 400 tokens
-        over 2.49s before, 19 tokens over 0.20s after.
+        It is the same cooperative stop ctrl-c uses, and the same decision made
+        the same way: the running line stops at its next token instead of
+        streaming a whole answer at someone who has left. Measured on a
+        400-token answer with ctrl-d ~20 tokens in: 400 tokens over 2.49s
+        before, 19 tokens over 0.20s after. It sets `left`, not `cancelled`,
+        because that stop must survive finished().
+
+        Unconditional, where interrupt() guards on `busy` — deliberate, do not
+        tidy the two to match. Ctrl-C means three different things depending on
+        whether sift is working (stop the line, clear the box, say how to
+        quit), so it has to look. Ctrl-D means one thing. And a busy check
+        would break the very race `left` exists for: finished() clears `busy`
+        while the worker is still streaming, so anything reading `busy` to
+        decide whether to stop that worker is reading the wrong answer.
         """
         self.queued = None
-        self.cancelled = True
+        self.left = True
+
+    def should_stop(self) -> bool:
+        """Should a worker stop streaming? Asked between tokens.
+
+        One question, two flags, and reading only `cancelled` is the bug this
+        exists to prevent — that one goes back down when the line ends, and a
+        worker that has not reached its next token by then never sees it.
+        """
+        return self.cancelled or self.left
 
     def _start(self) -> None:
         self.busy = True

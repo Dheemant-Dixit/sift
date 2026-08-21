@@ -81,6 +81,7 @@ def test_going_idle_after_a_cancel_does_not_leave_the_flag_set():
     runner.interrupt("")
     assert runner.finished() is None        # nothing queued: _start() never runs
     assert runner.cancelled is False
+    assert runner.should_stop() is False, "ctrl-c must not be sticky the way leaving is"
 
 
 # --- interrupt --------------------------------------------------------------
@@ -145,4 +146,20 @@ def test_leaving_also_stops_the_line_that_is_running():
     runner = Runner()
     runner.submit("first")
     runner.leaving()
-    assert runner.cancelled is True
+    assert runner.should_stop() is True
+
+
+def test_leaving_is_not_undone_by_the_line_finishing():
+    """Leaving is terminal, and finished() runs before the worker notices.
+
+    asyncio.run's teardown cancels the pending task; its finally calls
+    finished(). The executor thread cannot be cancelled, so it is still
+    streaming, and a per-line flag is already back down by the time it reaches
+    its next token. That is the whole answer streamed at someone who has gone.
+    """
+    runner = Runner()
+    runner.submit("first")
+    runner.leaving()
+    runner.finished()                  # teardown gets here before the worker does
+    assert runner.should_stop() is True, "finished() let the abandoned answer resume"
+    assert runner.left is True

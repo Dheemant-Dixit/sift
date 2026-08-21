@@ -854,6 +854,67 @@ def test_leaving_mid_answer_stops_the_answer_at_the_next_token():
         f"the answer streamed on after ctrl-d: {len(tokens)} tokens"
 
 
+def test_a_worker_that_wakes_after_teardown_is_still_stopped():
+    """The gap the gate above can only narrow.
+
+    asyncio.run's teardown cancels the pending _work task, and its finally
+    calls finished() - which puts the per-line flag back down. The executor
+    thread cannot be cancelled, so a model that pauses between tokens reaches
+    its next append() AFTER that, with nothing left to see, and streams the
+    whole answer at someone who has gone.
+
+    Here the worker is released from inside finished() itself, so it wakes up
+    strictly after the flag was cleared. Not a timer: the point is the order,
+    and this is the losing order every run rather than one in ten.
+    """
+    terminal, _ = a_terminal()
+    streaming = threading.Event()
+    go_on = threading.Event()
+    tokens = []
+    stopped = []
+
+    def dispatch(request):
+        terminal.region.append("first token ")
+        tokens.append("first token ")
+        streaming.set()
+        go_on.wait(timeout=2)
+        try:
+            # 40 one-character tokens, well under TAIL_MAX_CHARS, so nothing
+            # here commits and the test cannot park on a loop that has gone.
+            for _ in range(40):
+                terminal.region.append("x")
+                tokens.append("x")
+        except Cancelled:
+            stopped.append(True)
+            raise
+
+    terminal.dispatch = dispatch
+    real_finished = terminal.runner.finished
+
+    def finished_then_let_the_worker_run():
+        nxt = real_finished()
+        go_on.set()
+        return nxt
+
+    terminal.runner.finished = finished_then_let_the_worker_run
+
+    async def wait_until_it_is_streaming(term):
+        for _ in range(100):
+            if streaming.is_set():
+                break
+            await asyncio.sleep(0.02)
+
+    try:
+        drive(terminal, ["first\r"], extra=wait_until_it_is_streaming)
+    finally:
+        go_on.set()                 # never leave a worker parked on the gate
+    assert streaming.is_set(), "the answer never started, so nothing was stopped"
+    assert terminal.runner.busy is False, "finished() never ran - this proves nothing"
+    assert stopped == [True], "the worker was never told to stop"
+    assert tokens == ["first token "], \
+        f"the answer streamed on after the session ended: {len(tokens)} tokens"
+
+
 def test_quit_typed_as_a_word_ends_the_session():
     """`/quit` ends the session from the WORKER thread, so app.exit() has to be
     handed back to the loop. drive() sends ctrl-d after every test and that ends
