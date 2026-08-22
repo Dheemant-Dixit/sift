@@ -428,8 +428,23 @@ class TerminalSession:
 
         try:
             asyncio.run_coroutine_threadsafe(painter(), self.loop).result(COMMIT_TIMEOUT)
-        except concurrent.futures.TimeoutError:
-            # is_closed() above can only be True once asyncio.run()'s own
+        except (concurrent.futures.TimeoutError, concurrent.futures.CancelledError):
+            # Two ways the loop can accept this line and never paint it, both
+            # ending the same way: paint it here instead, and stop asking a
+            # loop that is going away.
+            #
+            # CANCELLED. asyncio.run()'s teardown cancels every pending task
+            # before it closes the loop, so a painter submitted moments before
+            # shutdown is cancelled rather than run. CancelledError is a
+            # BaseException, so it went straight past this handler, out of
+            # commit() and ui.note(), and killed the worker thread mid-burst -
+            # leaving the rest of its lines unpainted with nothing reporting
+            # why, because the exception surfaced in a run_in_executor future
+            # the dying loop was no longer awaiting. This is the ctrl-d-while-
+            # busy case the fast path above was written for, arriving a few
+            # milliseconds earlier than it expects.
+            #
+            # TIMED OUT. is_closed() above can only be True once asyncio.run()'s own
             # teardown gets to loop.close() - and that runs AFTER the main
             # coroutine has already returned, so there is a real window where
             # the loop has stopped pumping callbacks but is_closed() still

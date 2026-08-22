@@ -21,6 +21,7 @@ from prompt_toolkit.output import DummyOutput
 from prompt_toolkit.utils import get_cwidth
 from rich.console import Console
 
+from sift_downloads import terminal as terminal_module
 from sift_downloads.config import ConfigError
 from sift_downloads.session import Session
 from sift_downloads.terminal import (
@@ -769,6 +770,70 @@ def test_a_commit_does_not_hang_when_the_loop_has_stopped_but_not_closed():
     assert painted == ["a line from a stopped loop"]
     loop.close()
 
+
+
+def test_a_commit_survives_the_loop_cancelling_its_paint(monkeypatch):
+    """The third way a loop can fail to paint, and the one that killed the
+    worker outright.
+
+    commit() covers two of them: a loop already closed (paint straight to the
+    terminal) and a loop stopped but not closed (the COMMIT_TIMEOUT above).
+    Both assume the submission either runs or is ignored. There is a third:
+    the loop is alive enough to ACCEPT the coroutine, and then asyncio.run()'s
+    teardown cancels every pending task before it closes. `.result()` raises
+    CancelledError, which is a BaseException - so it sailed past the
+    `except TimeoutError` and out of commit(), out of ui.note(), and killed
+    the worker thread mid-burst. The remaining lines were never painted and
+    nothing said so: the exception surfaced in a run_in_executor future that
+    the dying loop was no longer awaiting.
+
+    Observed as a flake on the CI matrix rather than reasoned about: the
+    worker died at commit 21 of 200 with the loop shutting down under it.
+    Reproduced here without depending on that race - run_in_terminal is
+    replaced by a paint that never completes, so the painter task is reliably
+    pending when the cancellation arrives, exactly as asyncio.run() delivers
+    it.
+    """
+    terminal, painted = a_terminal()
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    terminal.loop = loop
+
+    painting = threading.Event()
+
+    async def never_finishes(_func):
+        painting.set()
+        await asyncio.Event().wait()        # pending, and cancellable
+
+    monkeypatch.setattr(terminal_module, "run_in_terminal", never_finishes)
+
+    done = threading.Event()
+
+    def worker():
+        terminal.commit("a line the loop will never paint")
+        done.set()
+
+    caller = threading.Thread(target=worker, daemon=True)
+    caller.start()
+
+    # Cancel only once the painter is genuinely pending. Cancelling before the
+    # task exists would cancel nothing, commit() would fall through to the
+    # 2.0s timeout instead, and the test would pass without ever exercising
+    # cancellation at all.
+    assert painting.wait(timeout=5.0), "the painter never started"
+    loop.call_soon_threadsafe(
+        lambda: [task.cancel() for task in asyncio.all_tasks(loop)])
+
+    caller.join(timeout=5.0)
+    assert done.is_set(), \
+        "commit() raised instead of returning - the worker thread is dead"
+    assert painted == ["a line the loop will never paint"], \
+        "the cancelled line never reached the screen"
+
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join(timeout=2.0)
+    loop.close()
 
 # --- the worker -------------------------------------------------------------
 
