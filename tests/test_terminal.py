@@ -734,6 +734,42 @@ def test_a_commit_after_the_loop_closes_still_paints_the_line():
     assert painted == ["the last of the answer"]
 
 
+def test_a_commit_does_not_hang_when_the_loop_has_stopped_but_not_closed():
+    """asyncio.run()'s own teardown closes the loop only AFTER its main
+    coroutine has already returned - there is a real window where the loop
+    has stopped pumping callbacks but is_closed() still reads False. A
+    commit() landing in that window used to submit to a loop nothing will
+    ever run again and block on .result() forever, silently: is_closed()
+    said "not closed yet", so the already-closed fallback above never fired.
+
+    Reproduced directly, without relying on hitting asyncio.run()'s narrow
+    internal window by luck: a loop is run to completion in its own thread
+    and left open (never closed) - "stopped but not closed" exactly.
+    """
+    terminal, painted = a_terminal()
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join(timeout=2.0)
+    assert not thread.is_alive(), "the loop never stopped running"
+    assert not loop.is_closed(), "the loop closed itself - this would not reproduce it"
+
+    terminal.loop = loop
+    done = threading.Event()
+
+    def worker():
+        terminal.commit("a line from a stopped loop")
+        done.set()
+
+    caller = threading.Thread(target=worker, daemon=True)
+    caller.start()
+    caller.join(timeout=5.0)
+    assert done.is_set(), "commit() blocked forever on a stopped, unclosed loop"
+    assert painted == ["a line from a stopped loop"]
+    loop.close()
+
+
 # --- the worker -------------------------------------------------------------
 
 async def wait_for_idle(terminal, tries=100):

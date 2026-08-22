@@ -21,6 +21,7 @@ opposite of what README.md:33 promises.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import threading
 import time
@@ -52,6 +53,11 @@ REDRAW_INTERVAL = 1 / 15
 # no tokens, so no append() invalidates. Ten frames a second, under the redraw
 # throttle, so a tick can never cost more than one paint.
 SPINNER_INTERVAL = 1 / 10
+# A real repaint finishes in milliseconds, so this is a safety valve for the
+# asyncio.run() shutdown race documented on commit(), not a performance
+# throttle - it should never fire in normal operation and only bounds how
+# long a worker can be stuck if it does.
+COMMIT_TIMEOUT = 2.0
 
 
 class Cancelled(Exception):
@@ -420,7 +426,21 @@ class TerminalSession:
         async def painter() -> None:
             await schedule()
 
-        asyncio.run_coroutine_threadsafe(painter(), self.loop).result()
+        try:
+            asyncio.run_coroutine_threadsafe(painter(), self.loop).result(COMMIT_TIMEOUT)
+        except concurrent.futures.TimeoutError:
+            # is_closed() above can only be True once asyncio.run()'s own
+            # teardown gets to loop.close() - and that runs AFTER the main
+            # coroutine has already returned, so there is a real window where
+            # the loop has stopped pumping callbacks but is_closed() still
+            # says False. A submission landing there waits forever for a
+            # callback nothing will ever run again: reproduced directly in
+            # test_a_commit_does_not_hang_when_the_loop_has_stopped_but_not_closed.
+            # Drop the loop so every commit after this one takes the fast
+            # path above immediately, instead of re-discovering the same
+            # timeout once per line of a burst.
+            self.loop = None
+            self.paint(line)
 
     def _on_the_loop(self) -> bool:
         """Am I on the thread running the app's loop?
