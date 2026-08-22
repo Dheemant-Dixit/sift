@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from collections.abc import Callable
 
@@ -32,6 +33,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.shortcuts import print_formatted_text
+from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import Frame, TextArea
 from rich.console import Console
 
@@ -89,6 +91,29 @@ class Scrollback:
         return False
 
 
+def _cwidth(text: str) -> int:
+    """Terminal columns `text` occupies. A CJK ideograph or emoji is 2, not 1 -
+    len() counts code points, and a row measured that way is silently twice
+    the real budget for any such text, so the terminal wraps it after all."""
+    return sum(get_cwidth(ch) for ch in text)
+
+
+def _fit(text: str, room: int) -> int:
+    """The longest prefix of `text`, in code points, whose columns fit `room`.
+
+    At least 1 whenever `text` is non-empty - a character wider than the
+    entire budget still has to go somewhere, and returning 0 would stop
+    `_wrap` making progress.
+    """
+    width = 0
+    for i, ch in enumerate(text):
+        w = get_cwidth(ch)
+        if width + w > room:
+            return max(1, i)
+        width += w
+    return len(text)
+
+
 def _wrap(text: str, room: int) -> list[str]:
     """Break one logical line into rows that fit, on spaces where possible.
 
@@ -96,21 +121,64 @@ def _wrap(text: str, room: int) -> list[str]:
     a non-empty line would lose the user's answer rather than mis-shape it.
     """
     rows: list[str] = []
-    while len(text) > room:
+    while _cwidth(text) > room:
+        limit = _fit(text, room)
         # Start at 1 for the reason append() does: a space at index 0 is a cut
-        # that removes nothing. Search one past `room` so a space landing
-        # exactly on the boundary is used rather than wasted.
-        cut = text.rfind(" ", 1, room + 1)
+        # that removes nothing. Search up to and including `limit` - the
+        # furthest point still inside the budget - so a space landing right at
+        # the edge is used rather than wasted.
+        cut = text.rfind(" ", 1, limit + 1)
         if cut < 0:
             # A word longer than the terminal. Break it — the alternative is a
             # row that wraps anyway, at column 0, with no indent.
-            rows.append(text[:room])
-            text = text[room:]
+            rows.append(text[:limit])
+            text = text[limit:]
         else:
             rows.append(text[:cut])
             text = text[cut + 1:]
     rows.append(text)
     return rows
+
+
+class PerThreadConsole:
+    """One rich Console per thread, so rich's own lock never spans two of them.
+
+    rich holds `Console._lock` for the whole of a `print()` call, including the
+    write to `file` - which here is `Scrollback.write`, which calls `commit()`.
+    A worker's `commit()` blocks until its paint lands on the loop, so while it
+    waits it is STILL HOLDING that lock. If the loop thread then prints through
+    the same Console - which every key binding that calls `ui.note`/`ui.echo`
+    does - it blocks trying to acquire a lock a worker is holding while waiting
+    for the very loop that is now stuck to run. Deadlock.
+
+    Measured: a worker streaming ~40 lines with no gaps (what `ui.results()`
+    does for a search) plus a single real ctrl-c keypress landing mid-burst
+    wedges the whole session - no repaints, no keys, `SIGKILL` only.
+
+    Splitting the Console per thread removes the shared lock. `commit()` stays
+    the one thing both threads still touch, and ordering across them was never
+    rich's job to begin with - prompt_toolkit's own `in_terminal()` chains
+    successive `run_in_terminal` calls through `app._running_in_terminal_f`
+    regardless of which thread scheduled them, so nothing here relied on the
+    lock for ordering; it was only ever an accidental, and now proven
+    dangerous, side effect of sharing one Console.
+    """
+
+    def __init__(self, make: Callable[[], Console]):
+        object.__setattr__(self, "_make", make)
+        object.__setattr__(self, "_local", threading.local())
+
+    def _console(self) -> Console:
+        console = getattr(self._local, "console", None)
+        if console is None:
+            console = self._local.console = self._make()
+        return console
+
+    def __getattr__(self, name: str):
+        return getattr(self._console(), name)
+
+    def __setattr__(self, name: str, value) -> None:
+        setattr(self._console(), name, value)
 
 
 class LiveRegion(Region):
@@ -232,7 +300,10 @@ class LiveRegion(Region):
             seconds = int(time.monotonic() - self._started)
             # Clipped, not wrapped: a status is one row. The download status
             # carries two file sizes and does overflow a narrow terminal.
-            line = f"  {spin} {self.message} {seconds}s"[:self._width()]
+            # _fit(), not a plain slice - a model name in the message can
+            # carry wide characters same as an answer can.
+            full = f"  {spin} {self.message} {seconds}s"
+            line = full[:_fit(full, self._width())]
             rows.append(f"\x1b[2m{line}\x1b[0m")
         if self.tail:
             rows += [self.INDENT + row for row in _wrap(self.tail, self._room())]
@@ -282,8 +353,21 @@ class TerminalSession:
         # straight past the renderer, and prompt_toolkit's model of where the
         # cursor sits is the only reason the box can be redrawn at all.
         self.ui.region = self.region
-        self.ui.console = Console(file=Scrollback(self.commit),
-                                  force_terminal=True, highlight=False)
+        # A proxy, not a Console - see PerThreadConsole's docstring for the
+        # deadlock this avoids. Each thread's own Console gets its own
+        # Scrollback, all funnelling into the one `self.commit`, which stays
+        # the single place ordering across threads is actually decided.
+        self.ui.console = PerThreadConsole(self._make_console)
+
+    def _make_console(self) -> Console:
+        console = Console(file=Scrollback(self.commit),
+                          force_terminal=True, highlight=False)
+        # Set once, from whichever thread first prints - the same "only
+        # knowable once there is an output to ask" reasoning _width() itself
+        # documents. Stale after a resize, same as before this class existed;
+        # that gap is parked (M5), not reopened here.
+        console.width = self._width()
+        return console
 
     # --- painting ----------------------------------------------------------
 
@@ -363,7 +447,18 @@ class TerminalSession:
             self.on_eof()
 
     def start(self, text: str) -> None:
-        """Send one line to the worker. Returns at once - the box stays live."""
+        """Send one line to the worker. Returns at once - the box stays live.
+
+        Echoes the line into scrollback here, not at submit time. A QUEUED
+        line used to be echoed the moment Enter was pressed - "> question B"
+        landed in real scrollback while answer A was still streaming, so A's
+        remaining rows arrived underneath a prompt for a question nobody had
+        started answering yet, with nothing to mark them as A's. start() is
+        the one place both the RUN path (on_enter) and the dequeue path
+        (_work's finally) actually begin a line, so it is the one place the
+        echo can happen exactly when it becomes true.
+        """
+        self.ui.echo(text.strip())
         request = parse(text)
         if self.loop is None:                       # pragma: no cover
             return
@@ -435,7 +530,6 @@ class TerminalSession:
             self.ui.note("one at a time — that one is still queued")
             return
         self.area.text = ""
-        self.ui.echo(text.strip())
         if verdict == Verdict.QUEUE:
             self.queued_line = text
             self.invalidate()

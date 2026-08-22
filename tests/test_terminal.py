@@ -18,6 +18,7 @@ from prompt_toolkit.application import create_app_session
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
+from prompt_toolkit.utils import get_cwidth
 from rich.console import Console
 
 from sift_downloads.config import ConfigError
@@ -289,6 +290,26 @@ def test_a_long_line_is_wrapped_before_the_terminal_gets_it():
     assert " ".join(row.strip() for row in committed) == words
 
 
+def test_a_wide_character_answer_wraps_by_columns_not_code_points():
+    """A CJK ideograph or emoji is one code point and TWO terminal columns.
+    Measuring with len() lets a row through at twice its real width, so the
+    terminal wraps it after all - to column 0, cutting wherever the edge
+    falls, losing the indent - the exact defect 3f79ac5 was written to fix,
+    silently un-fixed for any non-Latin answer. sift indexes whatever is in
+    the user's Downloads folder, so this is a realistic corpus."""
+    words = "通知期間は六十日です。" * 8
+    region, committed, _ = a_region(width=40)
+    region.append(words)
+    region.flush()
+    columns = 40 - len(LiveRegion.INDENT)
+    assert len(committed) > 1, "one row means len() let a too-wide row through"
+    for row in committed:
+        text = row[len(LiveRegion.INDENT):]
+        drawn = sum(get_cwidth(ch) for ch in text)
+        assert drawn <= columns, f"row is {drawn} columns wide, budget is {columns}"
+    assert "".join(row[len(LiveRegion.INDENT):] for row in committed) == words
+
+
 def test_every_row_the_region_reports_is_a_row_it_draws():
     """height() and render() used to compute the shape separately, and the
     Window does not wrap - so it clipped the tail at the screen edge and padded
@@ -478,11 +499,51 @@ def test_ctrl_d_while_working_still_leaves():
 
 def test_the_submitted_line_is_echoed_into_scrollback():
     """The box no longer erases itself, but Enter clears the text out of it - so
-    what you asked still has to land in scrollback above the answer."""
+    what you asked still has to land in scrollback above the answer. Stubs
+    dispatch, not start - the echo lives inside start() now (see the next
+    test), so stubbing start() away would stub away the thing under test."""
     terminal, painted = a_terminal()
-    terminal.start = lambda text: None
+    terminal.dispatch = lambda request: True
     drive(terminal, ["notice period\r"])
     assert "notice period" in screen_text(painted)
+
+
+def test_a_queued_lines_echo_waits_until_it_actually_starts():
+    """Echoing at QUEUE time put "> question B" in scrollback while answer A
+    was still streaming underneath it - A's remaining rows then landed under a
+    prompt for a question nobody had started answering yet, with nothing to
+    mark them as A's rather than B's. start() is the one place both the RUN
+    path (on_enter) and the dequeue path (_work's finally) actually begin a
+    line, so that is where the echo has to live."""
+    terminal, painted = a_terminal()
+    release = threading.Event()
+    mid_queue_snapshot = []
+
+    def held_dispatch(request):
+        if request.argument == "first":
+            release.wait(timeout=2)
+        return True
+    terminal.dispatch = held_dispatch
+
+    async def peek_while_queued_then_release(term):
+        await asyncio.sleep(0.05)
+        assert term.queued_line == "second", "the setup itself is wrong"
+        mid_queue_snapshot.append(screen_text(painted))
+        release.set()
+        # Give _work's finally a chance to actually dequeue and start "second"
+        # before drive()'s own ctrl-d tears the Application down - otherwise
+        # this races the session ending against the very thing being checked.
+        for _ in range(100):
+            if term.queued_line == "":
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("\"second\" was never dequeued")
+
+    drive(terminal, ["first\r", "second\r"], extra=peek_while_queued_then_release)
+
+    assert "second" not in mid_queue_snapshot[0], \
+        "the queued line's echo leaked into scrollback before it started"
+    assert "second" in screen_text(painted), "it must still land once it runs"
 
 
 def test_a_committed_line_is_painted_while_the_box_stays_up():
@@ -585,6 +646,64 @@ def test_a_worker_running_its_own_loop_still_waits_for_the_paint():
     drive(terminal, [], extra=commit_from_a_worker_with_a_loop)
     assert seen == [["sources"]], "commit() returned before the paint landed"
     assert paint_threads == [on_loop_thread], "the paint ran off the app's loop"
+
+
+def test_a_key_press_during_worker_output_does_not_deadlock():
+    """rich's Console holds its own lock for the whole of a print() call, down
+    to the write into Scrollback - which is commit(). A worker's commit()
+    BLOCKS on that lock while it waits for its paint to land on the loop, so a
+    key binding that prints through the SAME Console blocks trying to acquire
+    a lock the worker is holding while waiting for the very loop that key
+    binding is running on to make progress. Deadlock. Measured, before
+    PerThreadConsole existed: a worker printing a tight burst (what
+    ui.results() does for a search) with a real ctrl-c landing a few
+    milliseconds in wedged the session 3 runs out of 3, and not even
+    drive()'s own asyncio.wait_for could catch it - a stalled event loop
+    cannot run its own timeout callback either. Only something outside the
+    loop entirely can, which is what the bounded join below is for, not
+    decoration - the same reason test_a_commit_after_the_loop_closes... two
+    tests down uses one.
+    """
+    terminal, painted = a_terminal()
+    # Set by the worker's OWN code, not inferred from drive() returning:
+    # asyncio.run()'s teardown does not join the default executor's thread,
+    # so the burst can still be mid-flight after drive() has already come
+    # back. Checking `painted` at that point would be exactly the kind of
+    # repro-that-passes-by-doing-nothing this project has been burned by
+    # before.
+    dispatch_finished = threading.Event()
+
+    def fake_dispatch(request):
+        for i in range(200):                # tight: no gap between commits
+            terminal.ui.note(f"result {i}")
+        dispatch_finished.set()
+        return True
+    terminal.dispatch = fake_dispatch
+
+    async def press_ctrl_c_mid_burst(term):
+        await asyncio.sleep(0.003)
+        term.on_interrupt()                 # the loop thread, same as a real key
+
+    outcome: list[object] = []
+
+    def run():
+        try:
+            outcome.append(drive(terminal, ["?long search query\r"],
+                                 extra=press_ctrl_c_mid_burst))
+        except BaseException as e:           # reported below, not swallowed
+            outcome.append(e)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(timeout=8.0)
+
+    assert not thread.is_alive(), \
+        "deadlocked: a key press during worker output wedged the session"
+    assert dispatch_finished.wait(timeout=3.0), \
+        "the worker never finished - the race was not actually exercised"
+    assert outcome and not isinstance(outcome[0], BaseException), outcome
+    assert any("result 199" in p for p in painted), \
+        "the burst finished but its last line never reached the screen"
 
 
 def test_a_commit_after_the_loop_closes_still_paints_the_line():
