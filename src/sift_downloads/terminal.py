@@ -89,6 +89,30 @@ class Scrollback:
         return False
 
 
+def _wrap(text: str, room: int) -> list[str]:
+    """Break one logical line into rows that fit, on spaces where possible.
+
+    Greedy, and it never returns an empty list — a caller that drew nothing for
+    a non-empty line would lose the user's answer rather than mis-shape it.
+    """
+    rows: list[str] = []
+    while len(text) > room:
+        # Start at 1 for the reason append() does: a space at index 0 is a cut
+        # that removes nothing. Search one past `room` so a space landing
+        # exactly on the boundary is used rather than wasted.
+        cut = text.rfind(" ", 1, room + 1)
+        if cut < 0:
+            # A word longer than the terminal. Break it — the alternative is a
+            # row that wraps anyway, at column 0, with no indent.
+            rows.append(text[:room])
+            text = text[room:]
+        else:
+            rows.append(text[:cut])
+            text = text[cut + 1:]
+    rows.append(text)
+    return rows
+
+
 class LiveRegion(Region):
     """The rows between your scrollback and the input box.
 
@@ -108,10 +132,15 @@ class LiveRegion(Region):
 
     def __init__(self, commit: Callable[[str], None],
                  invalidate: Callable[[], None],
-                 should_stop: Callable[[], bool]):
+                 should_stop: Callable[[], bool],
+                 width: Callable[[], int]):
         self._commit = commit
         self._invalidate = invalidate
         self._should_stop = should_stop
+        # Asked per call, never cached. The terminal can be resized between two
+        # tokens of one answer, and a width read once at startup then wraps the
+        # rest of the session to a screen that is no longer there.
+        self._width = width
         self.message = ""
         self.tail = ""
         self._frame = 0
@@ -131,29 +160,51 @@ class LiveRegion(Region):
         self.tail += delta
         while "\n" in self.tail:
             line, _, self.tail = self.tail.partition("\n")
-            self._commit(self.INDENT + line if line else "")
+            self._commit_line(line)
         while len(self.tail) > self.TAIL_MAX_CHARS:
-            # Start at 1, not 0. A space at index 0 is a cut that removes
-            # nothing, and rfind reports "not found" as -1 - so a naive guard
-            # treats a real cut point and no cut point the same way, and the
-            # tail never shrinks again.
-            cut = self.tail.rfind(" ", 1, self.TAIL_MAX_CHARS)
-            if cut < 0:
-                # Nothing to break on. Cut mid-word, which is what wrapping
-                # does to you anyway, and far better than a region that grows
-                # until it pushes the box off the screen.
-                self._commit(self.INDENT + self.tail[:self.TAIL_MAX_CHARS])
-                self.tail = self.tail[self.TAIL_MAX_CHARS:]
-            else:
-                self._commit(self.INDENT + self.tail[:cut])
-                self.tail = self.tail[cut + 1:]
+            # Send whole ROWS to scrollback, not an arbitrary 240 characters.
+            # Cutting on the character count puts the break wherever the count
+            # happened to fall, which leaves a short ragged row mid-paragraph -
+            # and a model's paragraph is over the cap most of the time, so that
+            # fired on nearly every answer. A row boundary is where the text
+            # was going to break anyway.
+            rows = _wrap(self.tail, self._room())
+            if len(rows) < 2:
+                # A screen wide enough to hold the whole cap on one row. There
+                # is no row to send, and no growth to prevent either.
+                break
+            self._commit(self.INDENT + rows[0])
+            rest = self.tail[len(rows[0]):]
+            # _wrap eats the single space it broke on, and nothing when it had
+            # to break a word. Step over that space only if it is really there.
+            self.tail = rest[1:] if rest.startswith(" ") else rest
         self._invalidate()
 
     def flush(self) -> None:
         if self.tail:
-            self._commit(self.INDENT + self.tail)
+            self._commit_line(self.tail)
             self.tail = ""
         self._invalidate()
+
+    def _commit_line(self, line: str) -> None:
+        """Send one logical line to scrollback, as rows that fit the screen.
+
+        The terminal will wrap anything longer than the screen, but it wraps to
+        column 0 and cuts wherever the edge falls - so a long answer loses its
+        indent and splits mid-word. Measured on an 80-column terminal before
+        this: "either part" / "y may end the contract". ui.py:229 already
+        refuses to let that happen to a search result; this is the same rule
+        for a streamed answer, which is the longer text of the two.
+        """
+        if not line:
+            self._commit("")
+            return
+        for row in _wrap(line, self._room()):
+            self._commit(self.INDENT + row)
+
+    def _room(self) -> int:
+        """Columns left for the answer once the indent has taken its two."""
+        return max(1, self._width() - len(self.INDENT))
 
     # --- drawing -----------------------------------------------------------
 
@@ -163,26 +214,38 @@ class LiveRegion(Region):
             self._frame += 1
             self._invalidate()
 
-    def render(self) -> str:
-        """The region, as an ANSI string for prompt_toolkit's ANSI() to parse."""
+    def rows(self) -> list[str]:
+        """Every row the region draws, already fitted to the screen.
+
+        One source of truth for both render() and height(). They used to
+        compute the shape separately - render() emitted the tail as a single
+        long row while height() counted what that row WOULD take once wrapped -
+        and the Window does not wrap, so it clipped the row at the screen edge
+        and padded the difference with blanks. Measured mid-answer at 80
+        columns: 4 rows reserved, 1 drawn, 3 empty above the box, and the rest
+        of the streaming tail invisible until it reached scrollback.
+        """
         rows = []
         if self.message:
             spin = self.FRAMES[self._frame % len(self.FRAMES)]
             # `4s`, not rich's `0:00:04` - wrong-sized for a wait this short.
             seconds = int(time.monotonic() - self._started)
-            rows.append(f"\x1b[2m  {spin} {self.message} {seconds}s\x1b[0m")
+            # Clipped, not wrapped: a status is one row. The download status
+            # carries two file sizes and does overflow a narrow terminal.
+            line = f"  {spin} {self.message} {seconds}s"[:self._width()]
+            rows.append(f"\x1b[2m{line}\x1b[0m")
         if self.tail:
-            rows.append(self.INDENT + self.tail)
-        return "\n".join(rows)
+            rows += [self.INDENT + row for row in _wrap(self.tail, self._room())]
+        return rows
 
-    def height(self, width: int) -> int:
+    def render(self) -> str:
+        """The region, as an ANSI string for prompt_toolkit's ANSI() to parse."""
+        return "\n".join(self.rows())
+
+    def height(self) -> int:
         """How many rows the region needs. An inline Application does not grow
         to fit its content on its own — it has to be told."""
-        rows = 1 if self.message else 0
-        if self.tail:
-            room = max(1, width - len(self.INDENT))
-            rows += -(-len(self.tail) // room)      # ceil
-        return rows
+        return len(self.rows())
 
 
 class TerminalSession:
@@ -202,7 +265,7 @@ class TerminalSession:
         # fails in the "never stop" direction. That is the exact silence
         # `left` exists to close.
         self.region = LiveRegion(self.commit, self.invalidate,
-                                 lambda: self.runner.should_stop())
+                                 lambda: self.runner.should_stop(), self._width)
         self.queued_line = ""
         self.app: Application | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
@@ -431,7 +494,7 @@ class TerminalSession:
 
         live = Window(
             FormattedTextControl(lambda: ANSI(self.region.render())),
-            height=lambda: self.region.height(self._width()),
+            height=self.region.height,
             dont_extend_height=True,
         )
         queued = Window(

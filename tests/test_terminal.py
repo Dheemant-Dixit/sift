@@ -108,12 +108,12 @@ def test_a_bare_newline_commits_a_blank_line():
 # --- the live region --------------------------------------------------------
 
 
-def a_region(cancelled=False):
-    """A LiveRegion with its three collaborators replaced by lists."""
+def a_region(cancelled=False, width=80):
+    """A LiveRegion with its four collaborators replaced by lists and a width."""
     committed: list[str] = []
     repaints: list[int] = []
     region = LiveRegion(committed.append, lambda: repaints.append(1),
-                        lambda: cancelled)
+                        lambda: cancelled, lambda: width)
     return region, committed, repaints
 
 
@@ -173,6 +173,22 @@ def test_a_paragraph_with_no_spaces_at_all_is_still_committed():
     assert len(region.tail) <= LiveRegion.TAIL_MAX_CHARS
 
 
+def test_a_capped_paragraph_breaks_where_a_wrap_would_have():
+    """The cap used to cut at its own character count, which left a short
+    ragged row in the middle of a paragraph - and a model's paragraph is over
+    the cap most of the time, so it fired on nearly every answer."""
+    words = ("the quick brown fox jumps over the lazy dog "
+             * 20).strip()
+    region, committed, _ = a_region(width=40)
+    region.append(words)
+    region.flush()
+    assert len(committed) > 1
+    # Every row full to within one word of the screen, except the last.
+    for row in committed[:-1]:
+        assert len(row) > 40 - 12, f"ragged row mid-paragraph: {row!r}"
+    assert " ".join(row.strip() for row in committed) == words
+
+
 def test_a_leading_space_does_not_wedge_the_cut():
     """A space at index 0 removes nothing when cut on, and `rfind` reports "not
     found" as -1. Conflating the two stops the tail shrinking ever again."""
@@ -213,7 +229,8 @@ def test_appending_after_ctrl_c_stops_the_worker():
 
 def test_a_cancelled_region_commits_nothing():
     committed: list[str] = []
-    region = LiveRegion(committed.append, lambda: None, lambda: True)
+    region = LiveRegion(committed.append, lambda: None, lambda: True,
+                        lambda: 80)
     with pytest.raises(Cancelled):
         region.append("a whole line\n")
     assert committed == []
@@ -222,7 +239,7 @@ def test_a_cancelled_region_commits_nothing():
 def test_the_region_is_empty_when_nothing_is_happening():
     region, _, _ = a_region()
     assert region.render() == ""
-    assert region.height(80) == 0
+    assert region.height() == 0
 
 
 def test_the_status_line_carries_a_spinner_and_the_seconds():
@@ -244,17 +261,45 @@ def test_clearing_the_status_empties_the_region():
 def test_the_region_is_one_row_for_a_status_and_two_with_a_tail():
     region, _, _ = a_region()
     region.show("thinking...")
-    assert region.height(80) == 1
+    assert region.height() == 1
     region.append("short")
-    assert region.height(80) == 2
+    assert region.height() == 2
 
 
 def test_a_wrapped_tail_is_counted_in_rows_not_lines():
     """The Application is inline, so it has to be told its own height. Counting
     the tail as one row would draw the box over the answer."""
-    region, _, _ = a_region()
+    region, _, _ = a_region(width=40)
     region.append("x" * 100)
-    assert region.height(40) == 3
+    assert region.height() == 3
+
+
+def test_a_long_line_is_wrapped_before_the_terminal_gets_it():
+    """The terminal wraps too, but it wraps to column 0 and cuts wherever the
+    edge falls - so the indent is lost and words split in half. Measured on an
+    80-column terminal before this fix: "either part" / "y may end"."""
+    words = "the quick brown fox jumps over the lazy dog and keeps on going"
+    region, committed, _ = a_region(width=40)
+    region.append(words + "\n")
+    assert len(committed) > 1, "one row means the terminal did the wrapping"
+    assert all(row.startswith("  ") for row in committed), "indent on every row"
+    assert all(len(row) <= 40 for row in committed), "a row wider than the screen"
+    # Rejoining proves both halves at once: no character was dropped, and no
+    # word was cut, because a cut word could not be rejoined by a space.
+    assert " ".join(row.strip() for row in committed) == words
+
+
+def test_every_row_the_region_reports_is_a_row_it_draws():
+    """height() and render() used to compute the shape separately, and the
+    Window does not wrap - so it clipped the tail at the screen edge and padded
+    the rest with blanks. Measured mid-answer: 4 rows reserved, 1 drawn."""
+    region, _, _ = a_region(width=40)
+    region.show("reading your files")
+    region.append("x " * 60)
+    drawn = region.render().split("\n")
+    assert region.height() == len(drawn)
+    # The status row carries escapes, so only the tail rows can be measured.
+    assert all(len(row) <= 40 for row in drawn[1:]), "a row wider than the screen"
 
 
 def test_the_spinner_advances_between_repaints():
