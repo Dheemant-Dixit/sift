@@ -2,6 +2,115 @@
 
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org).
 
+## 0.7.0 — 2026-08-22
+
+**Asking a question meant watching an empty screen, then losing your prompt.**
+
+Three measurements on one real question drove this release:
+
+```
+retrieval          0.45s   spinner
+first token        4.43s   nothing on screen at all
+streaming          2.40s   the answer, half of it filenames
+```
+
+61% of the wait was blank. Then the input box vanished at Enter and did not
+come back until the answer had finished. This release fixes all three.
+
+### The box stays
+
+The interactive session now keeps one input box pinned below the output for
+the whole session, instead of building a fresh throwaway prompt per line.
+
+- **You can type the next question while the current one is still answering.**
+  One question may be queued ahead; the box never goes away.
+- **Ctrl-C now means cancel, not quit.** It stops the streaming answer and
+  hands the prompt back with the session intact. Ctrl-D is the only way out.
+- Finished lines commit into real scrollback as they complete, wrapped to the
+  actual terminal width by display column — so a CJK or emoji answer wraps
+  where it looks like it should. Nothing takes over your screen.
+
+Under it, `prompt_toolkit` owns the cursor and rich became a string formatter.
+The two libraries cannot share a terminal: `prompt_toolkit` rewrites every
+`\x1b` it is handed to a literal `?`, so sift's styled output run through the
+usual `patch_stdout()` recipe renders as visible garbage. rich now renders to
+a string, which `prompt_toolkit` paints.
+
+### The dead time is narrated
+
+The filenames sift is about to read are known the instant retrieval finishes —
+a full 4.43s before the model says anything, and they used to be printed
+*after* the answer as a footnote to a claim already made. They now appear
+first, under `— reading from —`, with an elapsed counter while the model
+thinks:
+
+```
+> what is my notice period
+
+  — reading from —
+    • offer-letter.pdf (chunk 4, 0.71)
+    • handbook.pdf (chunk 12, 0.66)
+
+  ⠙ thinking... 3s
+```
+
+Grounding before claims is the honest order for a tool that answers from your
+documents. One judgement worth stating plainly: the filenames now appear even
+when the model goes on to say it found nothing useful in them.
+
+### Answers stop repeating themselves
+
+The system prompt asked the model to cite filenames in `[brackets]` after each
+fact. That earned its place when sources were a footnote below the answer;
+once the filenames moved above it, every bracket became a duplicate that you
+wait for one token at a time. The rule is deleted. Measured over four real
+questions:
+
+```
+streaming   4.74s  ->  1.87s
+characters   639   ->   310
+answers with brackets   4 of 4  ->  0 of 4
+```
+
+Streaming was never fake, and this is why it looked it: deltas arrive every
+24.5ms with no gap over 200ms — the useful fact lands in the first few tokens
+and a second of filenames dribbles out behind it. **Token count is the only
+lever on how long an answer takes.**
+
+### One crash fixed on the way out
+
+Ending the session while sift was still printing — Ctrl-D during a burst of
+output — could kill the worker thread outright. The remaining lines were never
+shown and nothing said why. The session's teardown cancels a pending paint, and
+the cancellation was not one of the two endings the code knew how to handle.
+
+**Nothing to re-index.** The index format is unchanged, so upgrading costs
+nothing.
+
+### What this does not fix
+
+- **An answer drawing on two documents no longer says which fact came from
+  which.** The header names every file that was read, so telling them apart
+  means opening one. Two narrower rules were tried and rejected — both are
+  conditional instructions, and this project has already measured one prompt
+  nuance as completely inert at 8B.
+- **The pinned box is unverified on Windows.** There is no pty there, and CI
+  has never covered the session loop. The rest of sift is tested on Windows as
+  always.
+- **Resizing the terminal mid-answer is untested.** Lines already committed
+  stay wrapped at the width they were drawn at — the same thing every terminal
+  does to scrollback.
+- **Only one question can be queued**, and there is no history search or
+  completion in the box.
+- **`sift ask`, the one-shot, is unchanged** — it blocks entirely, so it has no
+  dead time to fill, and it still lists its sources after the answer.
+- **Retrieval is untouched.** `min_score` stays 0.55, chunking, the relevance
+  bar and the data fence are all as they were in 0.6.0.
+- **Still no `SIGTERM` handling** — the open roadmap item from 0.3.0.
+
+709 unit tests and 20 answer-quality evals, on Linux, macOS and Windows across
+Python 3.10 to 3.14.
+
 ## 0.6.0 — 2026-08-20
 
 **`ask` was spending its context window reading the same passage twice.**
