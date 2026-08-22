@@ -217,6 +217,14 @@ class LiveRegion(Region):
     # --- Region ------------------------------------------------------------
 
     def show(self, message: str) -> None:
+        if message and self._should_stop():
+            # A cancelled or departed line has nothing left to report. Without
+            # this, a status opened just after the interrupt - "thinking..."
+            # replacing "reading your files..." as retrieval finishes, say -
+            # reopens the exact stale spinner ctrl-c was supposed to close
+            # instantly. show("") still goes through unconditionally: this
+            # only refuses to put a NEW message up, never to clear one.
+            return
         self.message = message
         self._started = time.monotonic()
         self._frame = 0
@@ -476,17 +484,39 @@ class TerminalSession:
             # question B with nothing to mark it. That is the attribution shape
             # this whole tool is careful about, arriving through the UI.
             #
-            # show("") is a backstop, not dead weight: nothing today shows a
-            # status outside Region.status, whose own finally clears it. A
-            # spinner and a climbing counter over an idle box is a lie, so this
-            # covers the first dispatch path that shows one without a `with`.
-            # It also invalidates, which is why nothing below asks again.
-            self.region.show("")
-            self.region.tail = ""
+            # _clear_region() is a backstop here, not dead weight: nothing
+            # today shows a status outside Region.status, whose own finally
+            # clears it. A spinner and a climbing counter over an idle box is
+            # a lie, so this covers the first dispatch path that shows one
+            # without a `with`. It also invalidates, which is why nothing
+            # below asks again. For a ctrl-c'd line this is usually a no-op -
+            # on_interrupt() already did it - but the worker may have shown a
+            # fresh status between the interrupt and landing here, so it stays.
+            self._clear_region()
             nxt = self.runner.finished()
             self.queued_line = ""
             if nxt is not None:
                 self.start(nxt)
+
+    def _clear_region(self) -> None:
+        """Empty the live region: no stale spinner, no orphaned tail.
+
+        Two callers. `_work`'s finally is the natural one - a line ending on
+        its own should leave nothing pinned. `on_interrupt` needs the same
+        thing sooner: ctrl-c stops LISTENING immediately, but the worker
+        thread may still be blocked waiting on the model - inside
+        `next(tokens, None)` for the first token, say - and that does not
+        return just because `cancelled` went True. Left only to the worker's
+        own finally, "cancelled" could sit under a still-spinning
+        "thinking..." for however long the model takes to answer. Calling
+        this from on_interrupt too is what makes that instant.
+
+        Safe from either thread: `should_stop()` is already True by the time
+        either caller reaches this, so the worker's own next `append()` or
+        `show()` call is a no-op before it can touch region state again.
+        """
+        self.region.show("")
+        self.region.tail = ""
 
     def _run_one(self, request: Request) -> None:
         """The blocking half, on a worker thread."""
@@ -548,6 +578,11 @@ class TerminalSession:
             self.ui.note("(ctrl-d to quit)")
             return
         self.queued_line = ""
+        # Instant, not "whenever the worker next checks". The worker may be
+        # blocked waiting on the model with nothing to interrupt it, so
+        # leaving this to its own finally left the spinner turning under
+        # "cancelled" for however long that wait took - measured at ~2s.
+        self._clear_region()
         self.ui.note("cancelled")
         self.invalidate()
 

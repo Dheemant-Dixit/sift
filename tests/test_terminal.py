@@ -912,6 +912,60 @@ def test_a_status_left_running_by_a_line_is_cleared_when_it_ends():
     assert terminal.region.message == "", "the spinner is still turning over an idle box"
 
 
+def test_ctrl_c_clears_the_spinner_instantly_even_if_the_worker_is_still_blocked():
+    """Regression: on_interrupt used to only set `cancelled` and print
+    "cancelled" - clearing the spinner was left entirely to _work's finally,
+    which cannot run before the worker's blocking call returns. A model that
+    has not sent its first token yet leaves the worker stuck inside
+    `next(tokens, None)`, under `with ui.region.status("thinking..."):` - so
+    "cancelled" appeared with a spinner still turning underneath it, for
+    however long the model took to answer. Measured at ~2s. Ctrl-c has to
+    clear the region itself, synchronously, not wait for the worker to catch
+    up to a flag it has no reason to check yet.
+    """
+    terminal, painted = a_terminal()
+    running = threading.Event()
+    release = threading.Event()
+
+    def dispatch(request):
+        terminal.region.show("thinking...")
+        running.set()
+        release.wait(timeout=2)               # stands in for the blocked next()
+
+    terminal.dispatch = dispatch
+    seen = []
+
+    async def interrupt_while_still_blocked(term):
+        for _ in range(100):
+            if running.is_set():
+                break
+            await asyncio.sleep(0.02)
+        term.on_interrupt()                    # the loop thread, same as a real key
+        seen.append(term.region.message)       # checked BEFORE unblocking the worker
+        release.set()
+        await wait_for_idle(term)
+
+    drive(terminal, ["first\r"], extra=interrupt_while_still_blocked)
+    assert seen == [""], \
+        "the spinner was still up right after ctrl-c, before the worker ever unblocked"
+    assert "cancelled" in screen_text(painted)
+
+
+def test_a_status_raised_right_after_cancel_does_not_reopen_the_spinner():
+    """Closes the same gap one step further out: `show()` itself must refuse a
+    new message once cancelled, or a status opened between the interrupt and
+    the worker noticing - "thinking..." replacing "reading your files..." as
+    retrieval finishes, say - reopens the exact stale spinner ctrl-c just
+    closed. show("") still has to go through, or nothing would ever clear.
+    """
+    terminal, _ = a_terminal()
+    terminal.runner.cancelled = True
+    terminal.region.show("thinking...")
+    assert terminal.region.message == "", "a message got through after should_stop()"
+    terminal.region.show("")
+    assert terminal.region.message == "", "show('') must still clear the region"
+
+
 def test_the_queued_line_stops_being_shown_once_it_starts():
     """Sampled the moment the second line starts, not at the end of the drive:
     an implementation that only cleared the box at session end passes that."""
