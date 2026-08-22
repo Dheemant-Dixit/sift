@@ -159,6 +159,125 @@ class Session:
         return self.last_hits[index - 1].path, ""
 
 
+class Verdict:
+    """What to do about a key. Every one of these is a plain string on purpose:
+    the Application reads a key, asks the Runner, and does what it says."""
+
+    RUN = "run"          # start this line now
+    QUEUE = "queue"      # remember it; run it when the current line finishes
+    REJECT = "reject"    # the queue already holds a line
+    IGNORE = "ignore"    # blank input
+    CANCEL = "cancel"    # stop listening to the running line, drop the queue
+    CLEAR = "clear"      # wipe the input box
+    HINT = "hint"        # say how to quit
+
+
+@dataclass
+class Runner:
+    """Whether sift is working, what is waiting, and whether to stop listening.
+
+    Cancellation is cooperative. Ctrl-C in a persistent Application arrives as
+    byte 0x03 through a key binding — no SIGINT is sent to anyone, and Python
+    cannot kill a thread. So a cancelled line keeps running; `busy` stays True
+    until it really ends, which is what stops sift ever having two Ollama calls
+    in flight.
+
+    Two flags say "stop", and they have different lifetimes. `cancelled` is
+    about one line: ctrl-c stops this answer and the session carries on, so
+    finished() puts it back down. `left` is about the session: once the user
+    has gone, nothing should ever put it down again. Ask should_stop() rather
+    than reading either one.
+    """
+
+    busy: bool = False
+    queued: str | None = None
+    cancelled: bool = False
+    left: bool = False
+
+    def submit(self, text: str) -> str:
+        """Enter was pressed."""
+        if not text.strip():
+            return Verdict.IGNORE
+        if not self.busy:
+            self._start()
+            return Verdict.RUN
+        if self.queued is None:
+            self.queued = text
+            return Verdict.QUEUE
+        # One pending line, not a backlog. Replacing it would silently throw
+        # away something the user watched themselves type.
+        return Verdict.REJECT
+
+    def finished(self) -> str | None:
+        """A line ended — completed, failed or abandoned. Returns the next one.
+
+        `left` is deliberately not cleared here. asyncio.run's teardown cancels
+        the pending task and this runs from its finally, while the worker
+        thread it was waiting on is still streaming — so clearing the stop flag
+        here hands that worker a clean slate and it finishes the answer at
+        someone who has already gone.
+        """
+        self.busy = False
+        self.cancelled = False
+        nxt, self.queued = self.queued, None
+        if nxt is not None:
+            self._start()
+        return nxt
+
+    def interrupt(self, typed: str) -> str:
+        """Ctrl-C was pressed. Never quits — that is ctrl-d's job."""
+        if self.busy:
+            self.cancelled = True
+            self.queued = None
+            return Verdict.CANCEL
+        if typed:
+            # Whitespace in the box is still text to clear. submit() strips
+            # instead, because a blank line should not run a query — the two
+            # are different questions and the difference is deliberate.
+            return Verdict.CLEAR
+        return Verdict.HINT
+
+    def leaving(self) -> None:
+        """Ctrl-D was pressed. Drop what is waiting, stop what is running.
+
+        Nothing can kill the worker thread, so a line still streaming keeps
+        going, and the worker's own finally is what starts the QUEUED line.
+        Without dropping the queue, leaving during an answer makes sift go on
+        to answer the question you abandoned, after you have gone. Measured: it
+        really does.
+
+        It is the same cooperative stop ctrl-c uses, and the same decision made
+        the same way: the running line stops at its next token instead of
+        streaming a whole answer at someone who has left. Measured on a
+        400-token answer with ctrl-d ~20 tokens in: 400 tokens over 2.49s
+        before, 19 tokens over 0.20s after. It sets `left`, not `cancelled`,
+        because that stop must survive finished().
+
+        Unconditional, where interrupt() guards on `busy` — deliberate, do not
+        tidy the two to match. Ctrl-C means three different things depending on
+        whether sift is working (stop the line, clear the box, say how to
+        quit), so it has to look. Ctrl-D means one thing. And a busy check
+        would break the very race `left` exists for: finished() clears `busy`
+        while the worker is still streaming, so anything reading `busy` to
+        decide whether to stop that worker is reading the wrong answer.
+        """
+        self.queued = None
+        self.left = True
+
+    def should_stop(self) -> bool:
+        """Should a worker stop streaming? Asked between tokens.
+
+        One question, two flags, and reading only `cancelled` is the bug this
+        exists to prevent — that one goes back down when the line ends, and a
+        worker that has not reached its next token by then never sees it.
+        """
+        return self.cancelled or self.left
+
+    def _start(self) -> None:
+        self.busy = True
+        self.cancelled = False
+
+
 HELP = [
     ("<anything>", "search your files for it"),
     ("?<question>", "ask a question, answered from your files"),
@@ -169,5 +288,6 @@ HELP = [
     ("/sync", "refresh the index now"),
     ("/status", "what's indexed"),
     ("/help", "this list"),
+    ("ctrl-c", "stop the answer you are waiting for"),
     ("/quit", "leave (or ctrl-d)"),
 ]

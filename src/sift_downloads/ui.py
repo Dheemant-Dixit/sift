@@ -13,6 +13,8 @@ reads keys. That keeps the interesting parts testable without a terminal.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from prompt_toolkit.application import Application
@@ -22,14 +24,12 @@ from prompt_toolkit.layout import Layout
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, TextArea
 from rich.console import Console
-from rich.live import Live
 from rich.padding import Padding
-from rich.progress import Progress, ProgressColumn, SpinnerColumn, TextColumn
 from rich.text import Text
 
 from sift_downloads.config import ConfigError, Settings, get_settings
 from sift_downloads.humanize import MATCH_MARKER, human_age, human_size
-from sift_downloads.session import HELP, Request, Session, UiCommand, parse
+from sift_downloads.session import HELP, Request, Session, UiCommand
 from sift_downloads.store import IndexProblem
 
 log = logging.getLogger(__name__)
@@ -47,6 +47,94 @@ def _clip(text: str, room: int) -> str:
     if len(flat) <= room:
         return flat
     return flat[: max(1, room - 1)].rstrip() + "…"
+
+
+# ---------------------------------------------------------------------------
+# The live region
+# ---------------------------------------------------------------------------
+#
+# Four things used to animate through rich here: console.status in three
+# actions, and Progress + Live in _do_ask. Every one wrote escape sequences
+# straight at the terminal. Once a persistent Application owns the cursor that
+# is no longer allowed - prompt_toolkit keeps a model of where the cursor sits
+# so it can redraw the pinned box, and a stray escape from another writer
+# invalidates it. So all of them go behind this seam, and terminal.py supplies
+# an implementation that draws in the region above the box instead.
+
+
+class Status:
+    """A transient one-liner. `update` replaces it in place."""
+
+    def __init__(self, region: Region, message: str):
+        self._region = region
+        self.update(message)
+
+    def update(self, message: str) -> None:
+        self._region.show(message)
+
+
+class Region:
+    """Where work-in-progress is drawn. Three methods, and that is the contract.
+
+    `status` is a context manager so the caller reads the way `console.status`
+    did. `append`/`flush` accumulate a streaming answer.
+    """
+
+    def show(self, message: str) -> None:
+        raise NotImplementedError
+
+    @contextmanager
+    def status(self, message: str) -> Iterator[Status]:
+        handle = Status(self, message)
+        try:
+            yield handle
+        finally:
+            self.show("")
+
+    def append(self, delta: str) -> None:
+        raise NotImplementedError
+
+    def flush(self) -> None:
+        raise NotImplementedError
+
+
+class PlainRegion(Region):
+    """No terminal to own, so no animation: say it once and move on.
+
+    This is what a dumb terminal gets, and what the tests read. The animated
+    version lives in terminal.py, where there is an Application to draw it.
+    """
+
+    INDENT = 2
+
+    def __init__(self, console: Console):
+        self.console = console
+        self._tail = ""
+
+    def show(self, message: str) -> None:
+        """Nothing. A status is transient, and there is no way to erase a line
+        already printed into scrollback.
+
+        Two things break if this prints. The startup sync is quiet on purpose so
+        it does not push the banner off the screen, which
+        `test_a_quiet_sync_with_no_changes_prints_nothing` has pinned since it
+        was written. And `_offer_setup` calls `status.update` once per chunk of
+        a model download — printing each one turns one pull into hundreds of
+        lines. The spinner belongs to LiveRegion, which can redraw in place.
+        """
+
+    def append(self, delta: str) -> None:
+        self._tail += delta
+
+    def flush(self) -> None:
+        if not self._tail:
+            return
+        # A padded Text rather than raw deltas, so a wrapped line keeps its
+        # indent instead of reflowing to column 0. That is the property Live
+        # was chosen for at ui.py:224, and it has to survive the replacement.
+        self.console.print(Padding(Text(self._tail, style="default"),
+                                   (0, 0, 0, self.INDENT)))
+        self._tail = ""
 
 
 # ---------------------------------------------------------------------------
@@ -91,9 +179,11 @@ def read_line(history: InMemoryHistory, title: str = "sift") -> str | None:
 class Ui:
     """Everything that writes to the screen."""
 
-    def __init__(self, session: Session, console: Console | None = None):
+    def __init__(self, session: Session, console: Console | None = None,
+                 region: Region | None = None):
         self.session = session
         self.console = console or Console()
+        self.region = region or PlainRegion(self.console)
 
     # --- chrome ------------------------------------------------------------
 
@@ -198,20 +288,12 @@ def _do_find(ui: Ui, request: Request) -> None:
     from sift_downloads.find import find_files
 
     session = ui.session
-    with ui.console.status("[dim]searching...[/dim]", spinner="dots"):
+    with ui.region.status("searching..."):
         hits = find_files(request.argument, limit=10, recent_first=request.recent,
                           settings=session.settings)
     session.last_hits = hits
     session.remember("user", request.argument)
     ui.results(hits, request.argument)
-
-
-class _Seconds(ProgressColumn):
-    """How long we have been waiting, as `4s` — rich's own elapsed column
-    renders `0:00:04`, which is wrong-sized for a wait this short."""
-
-    def render(self, task) -> Text:
-        return Text(f"{int(task.elapsed or 0)}s", style="dim")
 
 
 def _do_ask(ui: Ui, request: Request) -> None:
@@ -220,7 +302,7 @@ def _do_ask(ui: Ui, request: Request) -> None:
     session = ui.session
     session.remember("user", request.argument)
 
-    with ui.console.status("[dim]reading your files...[/dim]", spinner="dots"):
+    with ui.region.status("reading your files..."):
         stream = AnswerStream(request.argument, settings=session.settings)
 
     if stream.refusal is not None:
@@ -236,29 +318,22 @@ def _do_ask(ui: Ui, request: Request) -> None:
 
     # The model call lives in AnswerStream.__iter__ and does not fire until
     # something asks for an item, so pulling the first token by hand is what
-    # brings it inside a spinner. Stopping the spinner is then the same
+    # brings it inside the spinner. Stopping the spinner is then the same
     # instant as having something to show: no blank gap, no double-drawing.
     tokens = iter(stream)
-    with Progress(SpinnerColumn("dots"), TextColumn("[dim]thinking...[/dim]"),
-                  _Seconds(), console=ui.console, transient=True) as progress:
-        progress.add_task("", total=None)
+    with ui.region.status("thinking..."):
         first = next(tokens, None)
 
-    # Stream the rest as it arrives, the way the one-shot CLI cannot.
-    # Live re-renders a padded Text rather than appending raw deltas, so
-    # wrapped lines keep their indent instead of reflowing to column 0.
     ui.console.print()
-    body = Text(style="default")
-    with Live(Padding(body, (0, 0, 0, 2)), console=ui.console,
-              refresh_per_second=15, vertical_overflow="visible") as live:
-        if first:
-            body.append(first)
-            live.update(Padding(body, (0, 0, 0, 2)))
-        for delta in tokens:
-            body.append(delta)
-            live.update(Padding(body, (0, 0, 0, 2)))
+    body = first or ""
+    if first:
+        ui.region.append(first)
+    for delta in tokens:
+        body += delta
+        ui.region.append(delta)
+    ui.region.flush()
 
-    if not body.plain.strip():
+    if not body.strip():
         ui.note("(the model returned nothing)")
     answer = stream.finish()
     session.remember("assistant", answer.text)
@@ -284,7 +359,7 @@ def _do_sync(ui: Ui, quiet: bool = False) -> None:
     from sift_downloads.index import update_index
 
     try:
-        with ui.console.status("[dim]syncing index...[/dim]", spinner="dots"):
+        with ui.region.status("syncing index..."):
             stats = update_index(ui.session.settings)
     except (ConfigError, IndexProblem) as e:
         ui.error(str(e).split("\n")[0])
@@ -347,12 +422,12 @@ def _offer_setup(ui: Ui) -> None:
     if (reply or "").strip().lower() not in ("y", "yes"):
         return
 
-    with ui.console.status("[dim]downloading...[/dim]", spinner="dots") as spinner:
+    with ui.region.status("downloading...") as status:
         for model in plan.to_pull:
             try:
-                pull_model(model, lambda p: spinner.update(
-                    f"[dim]{p.model} — {p.status} "
-                    f"{human_size(p.completed)} / {human_size(p.total)}[/dim]"))
+                pull_model(model, lambda p: status.update(
+                    f"{p.model} — {p.status} "
+                    f"{human_size(p.completed)} / {human_size(p.total)}"))
             except SetupError as e:
                 ui.error(str(e))
                 return
@@ -418,8 +493,20 @@ def dispatch(ui: Ui, request: Request) -> bool:
 # The loop
 # ---------------------------------------------------------------------------
 
+def _start_terminal(ui: Ui) -> int:
+    """Imported here, not at module scope: terminal.py imports this module."""
+    from sift_downloads.terminal import run_session
+
+    return run_session(ui)
+
+
 def run(settings: Settings | None = None) -> int:
-    """Start an interactive session. Returns a process exit code."""
+    """Start an interactive session. Returns a process exit code.
+
+    Everything before the Application starts still uses the plain rich console
+    and the one-shot read_line: banner, the first-run offer and the first sync
+    all happen while nothing owns the terminal yet.
+    """
     settings = settings or get_settings()
     session = Session(settings=settings)
     ui = Ui(session)
@@ -428,32 +515,6 @@ def run(settings: Settings | None = None) -> int:
     _offer_setup(ui)
     _do_sync(ui, quiet=True)
 
-    history = InMemoryHistory()
-    while True:
-        try:
-            line = read_line(history)
-        except (EOFError, KeyboardInterrupt):
-            break
-        if line is None:            # ctrl-c / ctrl-d in the box
-            break
-
-        request = parse(line)
-        if request.command == UiCommand.NOTHING:
-            continue
-        ui.echo(line.strip())
-
-        try:
-            if not dispatch(ui, request):
-                break
-        except KeyboardInterrupt:
-            # Interrupting a slow query returns you to the prompt; it doesn't
-            # end the session. Only the empty box exits.
-            ui.note("cancelled")
-        except (ConfigError, IndexProblem) as e:
-            ui.error(str(e).split("\n")[0])
-        except Exception as e:      # a bad query must not kill the session
-            ui.error(f"{type(e).__name__}: {e}")
-            log.debug("unhandled error in session", exc_info=True)
-
+    code = _start_terminal(ui)
     ui.console.print("  [dim]bye[/dim]")
-    return 0
+    return code

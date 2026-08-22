@@ -37,23 +37,45 @@ One file per concern; sections inside marked with `# --- name ---`.
 | `test_doctor.py` | preflight — mostly asserting the *fix* string, not the failure; which models each command declares |
 | `test_session.py` | parsing a typed line into a Request |
 | `test_ui.py` | rendering and dispatch, via an injected `Console` |
+| `test_session_runner.py` | what a key means, with no terminal involved |
+| `test_terminal.py` | the rich→ANSI bridge, the live region, and the pinned box driven headlessly |
 | `test_platform.py` | `open`/`xdg-open`/`explorer` per OS; watcher debouncing, one-sync-at-a-time, shutdown |
 | `test_small_to_big.py` | the indexed unit vs. the served window, and the document head |
 | `test_pr_template.py` | the `pr-template` check's rules, as a pure function |
 
 ## Deliberate coverage gaps
 
-Coverage is ~95%, gated at 92% on one job. What is left out, and why:
+Coverage is gated at 92% on one job, and sits comfortably above it. The figure
+is not written down here for the same reason the test count is not: it changes
+on most pull requests and nothing checks it. What is left out, and why:
 
-- **`ui.read_line` and `ui.run`** — prompt_toolkit key bindings and the event
-  loop. Testing them needs a pty, and what it would prove is that
-  prompt_toolkit works. Everything they call into is covered.
+- **`ui.read_line`** — the one-shot box `_offer_setup` still uses for its
+  yes/no prompt. Testing it would prove that prompt_toolkit works.
 - **`config._windows_downloads`** — a ctypes call into `shell32`, unreachable
   off Windows. Its fallback path and both callers are covered.
 
 Chasing these to 100% would add brittle tests, not confidence.
 
-## Two conventions worth knowing before you add a test
+`terminal.py` is deliberately *not* on that list. prompt_toolkit ships
+`create_pipe_input()`, `DummyOutput()` and `create_app_session()`, which drive a
+real inline Application with no pty — so the key bindings are tested rather than
+excused. What is left uncovered there is the paint call itself, two early
+returns that guard against there being no Application yet, and the width
+fallback for the same case — checked against `--cov-report=term-missing`, not
+assumed.
+
+## Conventions worth knowing before you add a test
+
+**A test that cannot fail is worse than no test, because it reads as
+protection.** This branch produced fourteen of them — assertions true for
+reasons unrelated to the code beneath them. The recurring shapes: a value the
+runtime guarantees anyway (`run_coroutine_threadsafe` is FIFO, so asserting
+commits "arrive in order" passes with the ordering code deleted); an assertion
+the test harness satisfies regardless (`drive()` always ends with ctrl-d, so
+`result is None` cannot tell ctrl-c from ctrl-d); and a stub fast enough that
+the state under test never occurs (a queue test whose first line finished before
+the second arrived, leaving `start(nxt)` unreachable by the entire suite).
+Break the thing your test guards and watch it fail before you trust it.
 
 **No document states how many tests there are.** The count was written into
 four files and every one of them was wrong: `README.md` had frozen at 0.4.0's

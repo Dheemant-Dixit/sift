@@ -68,6 +68,50 @@ def test_clipping_to_a_tiny_room_still_returns_something():
     assert _clip("a very long line indeed", 1)
 
 
+# --- the region seam --------------------------------------------------------
+
+def test_a_plain_status_stays_out_of_scrollback(screen):
+    """A status is transient and scrollback cannot be erased. The startup sync
+    is quiet so it does not push the banner off the screen — printing here
+    breaks that, and the spinner is LiveRegion's job anyway."""
+    before = screen.read()
+    with screen.region.status("searching..."):
+        pass
+    assert screen.read() == before
+
+
+def test_a_plain_region_does_not_accumulate_progress_updates(screen):
+    """`_offer_setup` calls update() once per chunk of a model download. One
+    line each would turn a single pull into hundreds."""
+    before = screen.read()
+    with screen.region.status("downloading...") as status:
+        for done in range(0, 500, 50):
+            status.update(f"llama3.1 — pulling {done}MB / 500MB")
+    assert screen.read() == before
+
+
+def test_a_plain_region_holds_streamed_text_until_it_is_flushed(screen):
+    screen.region.append("60 ")
+    screen.region.append("days")
+    assert "60 days" not in screen.read()
+    screen.region.flush()
+    assert "60 days" in screen.read()
+
+
+def test_flushing_an_empty_region_prints_nothing(screen):
+    before = screen.read()
+    screen.region.flush()
+    assert screen.read() == before
+
+
+def test_streamed_text_keeps_its_indent(screen):
+    """Live was chosen over raw deltas because a wrapped line reflows to column 0
+    and breaks the indent. Whatever replaces it has to keep that."""
+    screen.region.append("a line")
+    screen.region.flush()
+    assert "  a line" in screen.read()
+
+
 # --- chrome -----------------------------------------------------------------
 
 def test_the_banner_names_the_folder_and_the_model(screen):
@@ -487,17 +531,34 @@ def test_ctrl_c_during_the_download_returns_to_the_session(screen, offer, monkey
     assert "resume" in screen.read().lower()
 
 
-def test_the_session_offers_setup_before_it_tries_to_sync(monkeypatch, capsys):
+def test_the_session_offers_setup_before_it_tries_to_sync(monkeypatch):
     """Order is the whole point: the sync is what fails without models.
 
-    `run()` is otherwise untested here — with read_line stubbed this asserts the
-    wiring, not prompt_toolkit.
+    Both of those run BEFORE the Application starts, which is why read_line and
+    the plain rich console survive untouched for that phase.
     """
     from sift_downloads.config import get_settings
     done: list[str] = []
     monkeypatch.setattr(ui_module, "_offer_setup", lambda ui: done.append("offer"))
     monkeypatch.setattr(ui_module, "_do_sync", lambda ui, quiet=False: done.append("sync"))
-    monkeypatch.setattr(ui_module, "read_line", lambda *a, **k: None)
+    monkeypatch.setattr(ui_module, "_start_terminal",
+                        lambda ui: done.append("terminal") or 0)
 
     assert ui_module.run(get_settings()) == 0
-    assert done == ["offer", "sync"]
+    assert done == ["offer", "sync", "terminal"]
+
+
+def test_the_session_really_reaches_the_terminal_module(monkeypatch):
+    """The one function whose entire job is the import direction, and the only
+    place it is executed. Every other test stubs `_start_terminal` out, so
+    renaming `run_session` in terminal.py used to leave the whole suite green
+    while every real session died at startup on the ImportError.
+    """
+    from sift_downloads import terminal as terminal_module
+
+    seen = []
+    monkeypatch.setattr(terminal_module, "run_session",
+                        lambda ui: seen.append(ui) or 3)
+    ui = Ui(Session())
+    assert ui_module._start_terminal(ui) == 3
+    assert seen == [ui], "the caller's Ui was not the one handed over"
