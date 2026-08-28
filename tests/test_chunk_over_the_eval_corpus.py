@@ -23,6 +23,7 @@ from pathlib import Path
 
 from sift_downloads.chunk import chunk_text, line_blocks
 from sift_downloads.config import get_settings
+from sift_downloads.store import TOKEN
 
 CORPUS = Path(__file__).resolve().parents[1] / "evals" / "corpus"
 
@@ -75,3 +76,24 @@ def test_chunking_loses_no_text():
                  if line.strip() and line.strip() not in have]
 
     assert not lost, f"{len(lost)} lines dropped during chunking"
+
+
+def test_the_children_hold_every_word_their_parent_does():
+    """The premise the lexical gate's vocabulary rests on.
+
+    `store.vocabulary` is built from `matched_text` — the embedded child —
+    because that is the cheaper string and the one the vectors describe. That
+    is only safe while children cover their parents word for word. The moment a
+    word survives in a served window but in no child, the gate refuses a
+    question sift can answer and blames the user's wording for it.
+
+    Measured on a real 4,977-unit index: both sources give the same 11,966
+    terms, with zero words in one and not the other.
+    """
+    missing = set()
+    for parent, children in _children_by_parent():
+        in_children = {w for child in children for w in TOKEN.findall(child.lower())}
+        missing |= set(TOKEN.findall(parent.lower())) - in_children
+
+    assert not missing, \
+        f"{len(missing)} words are in a parent but in no child: {sorted(missing)[:10]}"

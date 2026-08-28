@@ -13,8 +13,10 @@ import pytest
 from evalset import (
     ACCOUNT_NUMBER,
     DESIGNATION_QUERY,
+    IDENTIFIER_QUESTIONS,
     LANDLORD_QUERY,
     NEGATIVES,
+    OUT_OF_DOMAIN,
     POSITIVES,
     REFUSAL,
     WRONG_ENTITY,
@@ -81,12 +83,59 @@ def test_the_landlord_query_never_reaches_the_payslip(retrieved):
         f"(all admitted: {[(c['filename'], round(c['score'], 3)) for c in admitted]})")
 
 
-def test_no_owned_identifier_leaks_into_a_negative_answer(ask):
-    """No question that didn't ask for them gets the corpus's own identifiers."""
+def test_no_owned_identifier_leaks_into_a_negative_answer(ungated):
+    """No question that didn't ask for them gets the corpus's own identifiers.
+
+    Run with the lexical gate OFF, deliberately. The gate refuses all three
+    negatives on their words — "landlord", "blood", "airspeed" are each absent
+    from the corpus — so with it on, the model is never called and this test
+    passes without testing anything. What it exists to check is what the model
+    does when it IS handed tempting passages, and that is the dense path.
+    """
     for question in NEGATIVES:
-        for reply in [a.text for a in ask(question, runs=2)]:
+        for reply in [a.text for a in ungated(question, runs=2)]:
             leaked = leaked_identifiers(reply)
             assert not leaked, f"{question!r} leaked {leaked}:\n  {reply}"
+
+
+# --------------------------------------------------------------------------
+# The word check: what the relevance bar cannot do.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("question", OUT_OF_DOMAIN)
+def test_an_out_of_domain_question_is_refused_before_any_model_call(prepared, question):
+    """A question about something the corpus has never heard of.
+
+    Every one of these clears the calibrated bar — 0.501 to 0.558 against 0.50 —
+    so before the gate they were admitted, the model was called, and the only
+    thing standing between the user and an answer was the model's own good
+    manners. Refusing them is a guarantee; asking the model nicely is not.
+
+    Needs no chat model: if the gate works, nothing is embedded either.
+    """
+    chunks, refusal = prepared(question)
+    assert refusal is not None, f"{question!r} was admitted, not refused"
+    assert not chunks
+    assert "appears in none of" in refusal.text or "appear in none of" in refusal.text, \
+        f"refused, but not on its words: {refusal.text!r}"
+
+
+def test_the_word_check_refuses_nothing_the_corpus_can_answer(indexed_corpus):
+    """False refusal is the gate's own failure mode. This is the guard on it.
+
+    Identifier questions are included because that is where it would show up
+    first: ask for a "UAN" against a document that writes "universal account
+    number" out in full and the letters appear nowhere. They are not scored as
+    positives — see evalset.py for why — but they must not be refused.
+    """
+    from sift_downloads.generate import absent_terms
+    from sift_downloads.retrieve import get_store
+
+    vocabulary = get_store().vocabulary
+    answerable = [q for q, _, _ in POSITIVES] + IDENTIFIER_QUESTIONS
+    refused = {q: absent_terms(q, vocabulary) for q in answerable
+               if absent_terms(q, vocabulary)}
+    assert not refused, f"the word check refused questions the corpus answers: {refused}"
 
 
 # --------------------------------------------------------------------------

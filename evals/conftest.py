@@ -75,7 +75,43 @@ def ask(indexed_corpus):
 
 
 @pytest.fixture(scope="session")
-def served(indexed_corpus):
+def ungated(indexed_corpus):
+    """The same corpus with the lexical gate off.
+
+    The gate refuses all three negatives on their words alone, which is the
+    right product behaviour and stops the leak test below from testing
+    anything: a question the model never sees cannot leak. So that test runs
+    the dense path deliberately, and the two mechanisms stay measurable apart.
+    """
+    import dataclasses
+
+    from sift_downloads.generate import answer
+
+    settings = dataclasses.replace(indexed_corpus, lexical_gate=False)
+
+    def _ask(question: str, runs: int = 3):
+        return [answer(question, settings=settings) for _ in range(runs)]
+
+    return _ask
+
+
+@pytest.fixture(scope="session")
+def prepared(indexed_corpus):
+    """(chunks, refusal) straight from the guardrail — no chat model needed.
+
+    Everything `ask` does up to the model call, which is where both refusals
+    live: the word check and the relevance bar.
+    """
+    from sift_downloads.generate import prepare
+
+    def _prepared(query: str) -> tuple[list[dict], object]:
+        return prepare(query, settings=indexed_corpus)
+
+    return _prepared
+
+
+@pytest.fixture(scope="session")
+def served(prepared):
     """The passages the MODEL is handed, after the bar and after collapsing.
 
     `retrieved` below is the raw store output; this is what `ask` would put in
@@ -83,11 +119,8 @@ def served(indexed_corpus):
     274MB embedding model, so the duplicate-passage regression stays checkable
     without the 4.9GB chat one.
     """
-    from sift_downloads.generate import prepare
-
     def _served(query: str) -> list[dict]:
-        chunks, _refusal = prepare(query, settings=indexed_corpus)
-        return chunks
+        return prepared(query)[0]
 
     return _served
 

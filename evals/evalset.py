@@ -94,6 +94,39 @@ NEGATIVES = [
     "what is the airspeed of an unladen swallow?",
 ]
 
+# Questions about things this corpus does not contain, built from words it does
+# not contain either. The suite had none of these, and that is why it could not
+# see the defect the lexical gate was built for: the relevance bar ADMITS every
+# one of them. Measured at 0.7.0 on this corpus, top-1 cosine, against the
+# calibrated bar of 0.50: 0.528, 0.558, 0.501, 0.519, 0.548. Not one is refused
+# by score. All five are refused on their words.
+#
+# The last two are not questions at all. They are here because an
+# identifier-shaped string pulls identifier-shaped passages: on a real index
+# "7f3a9c2e 11b8 4d6f" scored 0.733, above 11 of 12 genuine questions.
+OUT_OF_DOMAIN = [
+    "what is my quidditch seeker ranking?",
+    "when does my scuba certification expire?",
+    "what is my parking permit number?",
+    "asdkjh qwoieu zxcmnb",
+    "7f3a9c2e 11b8 4d6f",
+]
+
+# Identifier questions the corpus genuinely answers. They are NOT positives, and
+# the reason is worth recording: measured at 0.7.0 they score 0.500, 0.460 and
+# 0.500 — at or under the calibrated bar — so as positives they would ship red.
+# That is a limit of an 89-unit corpus, not of the product; the same class of
+# question scores 0.59-0.76 on a real 4,977-unit index. They are kept for the
+# one thing they can honestly pin: the word check must not refuse them. A false
+# refusal is the gate's own failure mode, and identifier questions are where it
+# would show up first, because a document that writes "universal account number"
+# in full contains no "UAN".
+IDENTIFIER_QUESTIONS = [
+    "what is my IFSC code?",
+    "what is my UAN number?",
+    "what is my bank account number?",
+]
+
 # The specific wrong answer that 0.2.0 exists to prevent: the Form 16
 # signatory's title, offered when the employee's own title was asked for.
 WRONG_ENTITY = compile_marker(r"senior payroll controller")

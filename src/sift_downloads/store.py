@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -97,6 +98,14 @@ class IndexedChunk:
         return self.index_text or self.text
 
 
+# How a word is cut out of text — for the vocabulary below AND for the question
+# the lexical gate checks against it. It is one regex on purpose: a question word
+# can only be found in the vocabulary if both sides were cut the same way.
+# Digits are in because half the questions worth asking are about identifiers, and
+# the hyphen is kept inside a word so "lock-in" does not become "lock" plus "in".
+TOKEN = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+
 def normalize(matrix: np.ndarray) -> np.ndarray:
     """Scale each row to unit length, so a dot product equals cosine similarity."""
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)
@@ -110,6 +119,7 @@ class VectorStore:
         self.records: list[IndexedChunk] = records or []
         self.header: dict = header or {}
         self._matrix: np.ndarray | None = None  # derived cache; None = rebuild needed
+        self._vocab: frozenset[str] | None = None  # derived cache; None = rebuild needed
 
     def __len__(self) -> int:
         return len(self.records)
@@ -145,11 +155,36 @@ class VectorStore:
                 self._matrix = np.zeros((0, max(self.dim, 1)), dtype=np.float32)
         return self._matrix
 
+    @property
+    def vocabulary(self) -> frozenset[str]:
+        """Every word that appears in at least one indexed unit.
+
+        A second cache over `self.records`, built and invalidated exactly like
+        `matrix` — which is the point. It answers one question embeddings cannot
+        answer at all: "does this word occur anywhere in the folder?" A cosine
+        score is a direction, not a presence test, so `min_score` admits
+        gibberish; a word list refuses it without a model call.
+
+        Built from `matched_text`, the string that was embedded, not from the
+        served window. The two give the same word set as long as children cover
+        their parents — pinned over the eval corpus in
+        `tests/test_chunk_over_the_eval_corpus.py`, because if that ever stops
+        holding, the gate starts refusing questions sift can answer.
+        """
+        if self._vocab is None:
+            self._vocab = frozenset(
+                word
+                for r in self.records
+                for word in TOKEN.findall(r.matched_text.lower())
+            )
+        return self._vocab
+
     # --- mutation (the only ways to change the store) ---------------------
 
     def add(self, records: list[IndexedChunk]) -> None:
         self.records.extend(records)
         self._matrix = None
+        self._vocab = None
 
     def remove_paths(self, paths: set[str]) -> int:
         """Drop every chunk belonging to any of `paths`; returns how many went."""
@@ -158,6 +193,7 @@ class VectorStore:
         before = len(self.records)
         self.records = [r for r in self.records if r.path not in paths]
         self._matrix = None
+        self._vocab = None
         return before - len(self.records)
 
     # --- retrieval --------------------------------------------------------

@@ -440,3 +440,134 @@ def test_a_top_k_below_one_is_refused_by_the_number_the_caller_passed(retrieved)
     would name the multiplied value: `--top-k -1` refused for being -5."""
     with pytest.raises(ConfigError, match="got -1"):
         prepare("q", top_k=-1)
+
+
+# --- the lexical presence gate --------------------------------------------
+#
+# `min_score` cannot tell junk from signal: measured on a real 4,977-unit index,
+# the string "7f3a9c2e 11b8 4d6f" scores 0.733 — above 11 of 12 genuine
+# questions — because an identifier-shaped query pulls identifier-shaped
+# passages with nothing understood on either side. No bar separates the two
+# groups. A word list can: if a word occurs in none of your documents, no amount
+# of cosine makes it present.
+
+@pytest.fixture
+def indexed(monkeypatch):
+    """Control which words the index is known to contain."""
+    import numpy as np
+
+    from sift_downloads.store import IndexedChunk, VectorStore
+
+    def _indexed(*texts: str):
+        records = [IndexedChunk(path=f"/src/doc{i}.md", filename=f"doc{i}.md",
+                                chunk_index=0, text=t,
+                                vector=np.zeros(3, dtype=np.float32))
+                   for i, t in enumerate(texts)]
+        store = VectorStore(records)
+        monkeypatch.setattr(generate, "get_store", lambda: store)
+        return store
+    return _indexed
+
+
+@pytest.fixture
+def no_retrieval(monkeypatch):
+    """Make retrieval an error, so 'refused before embedding' is testable."""
+    def explode(*args, **kwargs):
+        raise AssertionError("the question was retrieved for when it should have "
+                             "been refused on its words alone")
+
+    monkeypatch.setattr(generate, "search", explode)
+
+
+def test_a_word_in_no_document_refuses_before_anything_is_retrieved(indexed, no_retrieval,
+                                                                    no_model):
+    indexed("the quarterly revenue report for acme")
+    result = answer("what is my quidditch ranking?")
+    assert result.refused
+    assert result.chunks == []
+
+
+def test_the_refusal_names_the_word_that_is_missing(indexed, no_retrieval, no_model):
+    """A wrong refusal has to explain itself, or the user concludes the document
+    is not indexed and stops asking."""
+    indexed("the quarterly revenue report for acme")
+    result = answer("what is my quidditch ranking?")
+    assert '"quidditch"' in result.text
+    assert "none of your 1 file" in result.text
+
+
+def test_the_refusal_names_at_most_three_missing_words(indexed, no_retrieval, no_model):
+    indexed("the quarterly revenue report")
+    result = answer("quidditch horcrux basilisk thestral")
+    assert result.text.count('"') == 6
+
+
+def test_a_question_whose_words_are_all_indexed_is_retrieved_for(indexed, retrieved):
+    indexed("the quarterly revenue report for acme")
+    retrieved["chunks"] = [chunk(score=0.9)]
+    chunks, refusal = prepare("what was the quarterly revenue?")
+    assert refusal is None
+    assert len(chunks) == 1
+
+
+def test_question_scaffolding_never_vetoes(indexed, retrieved):
+    """The words a question is made of are not document words. If "where" has
+    to be in your files before you may ask "where", the gate refuses everything."""
+    indexed("acme")
+    retrieved["chunks"] = [chunk(score=0.9)]
+    _, refusal = prepare("please could you tell me where acme is?")
+    assert refusal is None
+
+
+def test_a_short_abbreviation_is_not_allowed_to_veto(indexed, retrieved):
+    """The gate's one known failure: a document that writes "universal account
+    number" in full contains no "uan", so a user who asks for their UAN is
+    refused an answer sift can give. The length floor is what covers the
+    lowercase spelling."""
+    indexed("universal account number 101998776543")
+    retrieved["chunks"] = [chunk(score=0.9)]
+    _, refusal = prepare("what is my uan?")
+    assert refusal is None
+
+
+def test_a_word_typed_as_an_acronym_is_not_allowed_to_veto(indexed, retrieved):
+    """The same failure in the other spelling, which the length floor misses:
+    four letters, so only "the user typed it as an acronym" saves it."""
+    indexed("national electronic funds transfer reference for the payee")
+    retrieved["chunks"] = [chunk(score=0.9)]
+    _, refusal = prepare("what is my NEFT reference?")
+    assert refusal is None
+
+
+def test_a_long_lowercase_word_still_vetoes(indexed, no_retrieval, no_model):
+    """The guards above must not swallow the rule they guard: an ordinary word,
+    typed ordinarily, still refuses."""
+    indexed("national electronic funds transfer to the payee")
+    assert answer("what is my quidditch?").refused
+
+
+def test_an_empty_index_is_not_blamed_on_the_wording(indexed, retrieved):
+    """Every word is absent from an empty index, so the gate would refuse every
+    question and name the user's words as the reason the folder is empty."""
+    indexed()
+    retrieved["chunks"] = []
+    _, refusal = prepare("what is my quidditch ranking?")
+    assert refusal is not None
+    assert "quidditch" not in refusal.text
+
+
+def test_the_gate_can_be_switched_off(indexed, retrieved):
+    """The rule is fitted to one observed failure, so a false refusal needs a
+    workaround that is not a downgrade."""
+    indexed("the quarterly revenue report for acme")
+    retrieved["chunks"] = [chunk(score=0.9)]
+    configure(lexical_gate=False)
+    chunks, refusal = prepare("what is my quidditch ranking?")
+    assert refusal is None
+    assert len(chunks) == 1
+
+
+def test_a_word_asked_for_twice_is_named_once(indexed, no_retrieval, no_model):
+    indexed("the quarterly revenue report")
+    result = answer("quidditch, and more quidditch")
+    assert result.text.count("quidditch") == 1

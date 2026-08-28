@@ -23,9 +23,10 @@ FINDING   (sift find)
          └─►  tokenize  ─►  filename match  ────────────────┘        find.py
 
 ASKING    (sift ask)
-  query  ─►  embed  ─►  cosine top-5  ─►  filter by score  ─►  grounded prompt
-                                          └─ nothing relevant? refuse, no LLM call
-                                                                    generate.py
+  query  ─►  word check  ─►  embed  ─►  cosine top-5  ─►  filter by score  ─►  grounded prompt
+              └─ a word in no document? refuse, no embed and no LLM call
+                                                        └─ nothing relevant? refuse, no LLM call
+                                                                                    generate.py
 ```
 
 ## Read the code in this order
@@ -293,6 +294,46 @@ shown.
 Both the streaming and one-shot paths go through the same `generate.prepare()`,
 so there is exactly one copy of this rule and the two paths cannot drift apart.
 
+### Two refusals, not one
+
+There are two guards in front of the model, and they answer different questions.
+
+The relevance bar asks "is the best passage close enough?" That is a cosine
+score, and a score is a direction, not a presence test. Measured on a real index
+of 4,977 units, the string `7f3a9c2e 11b8 4d6f` — not words, not a question —
+scores 0.733, higher than 11 of 12 genuine questions. An identifier-shaped query
+pulls identifier-shaped passages, and nothing is understood on either side. Junk
+and signal sit on the same stretch of the axis, so no value of `min_score`
+separates them, and scoring the top hit against its own distribution is worse: a
+z-score bar strict enough to refuse the junk keeps none of the real questions.
+
+The lexical gate asks something a vector cannot express at all: **does this word
+occur in your folder?** The store keeps a vocabulary — every word in at least one
+indexed unit — next to its matrix, built and invalidated the same way. If a word
+from your question is in none of your documents, sift refuses, names the word,
+and does that *before* it embeds anything and before it calls a model.
+
+```
+$ sift ask "what is my quidditch seeker ranking?"
+
+I couldn't find that in your documents.
+  ("quidditch" appears in none of your 36 files)
+```
+
+Naming the word is the part that matters. A refusal that explains itself can be
+rephrased; one that does not reads as "that document is not indexed".
+
+A word only vetoes when it is absent, at least four characters long, and was not
+typed as an acronym. Both guards exist for one measured failure: you ask for your
+UAN, the document spells out "universal account number", the letters appear
+nowhere, and a question sift could answer is refused. The rule was fitted to that
+single case, which is why `SIFT_LEXICAL_GATE=0` exists.
+
+Its limit, measured: a question built from ordinary document words — "passport",
+"parking" — walks through the gate even when the answer is absent, because the
+word is somewhere in the folder. It is a strong filter for "this question is not
+about your documents" and a weak one for "it is, and the answer is not there".
+
 ---
 
 ## Where the privacy gates live
@@ -372,8 +413,15 @@ original run:
 **Those ranges overlap, and that is the honest result.** "What is the capital of
 France?" scored 0.63 against a folder containing nothing about France — higher
 than several real questions scored. One cosine threshold cannot cleanly separate
-relevant from irrelevant. It trims the obvious noise and no more. Fixing it
-properly needs a re-ranker.
+relevant from irrelevant. It trims the obvious noise and no more.
+
+Do not try to fix that by moving the bar. The overlap was measured again on a
+real index and there is no value that refuses the junk and keeps the answers.
+Most of what the bar was being asked to catch — questions that are not about your
+documents at all — is caught before it now, by the word check described in
+[two refusals](#two-refusals-not-one). What is left for the bar is the harder
+half: questions that *are* about your documents, where the answer is still not
+there. Fixing that properly needs a re-ranker.
 
 ---
 

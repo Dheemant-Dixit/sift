@@ -22,8 +22,8 @@ One file per concern; sections inside marked with `# --- name ---`.
 
 | file | what it pins down |
 |---|---|
-| `test_generate.py` | **the refusal guarantee** — that no model call happens when nothing clears the bar |
-| `test_store.py` | the vector/metadata alignment invariant, corrupt-index rejection |
+| `test_generate.py` | **the refusal guarantee** — that no model call happens when nothing clears the bar, or when a word in the question is in no document |
+| `test_store.py` | the vector/metadata alignment invariant, corrupt-index rejection, the vocabulary cache |
 | `test_index.py` | incremental sync, provenance, `embed_texts` batching |
 | `test_ingest.py` | extraction, locked vs. scanned PDFs, the reason vocabulary |
 | `test_ingest_edges.py` | directories, dotfiles, empty/huge/unreadable files, duplicate ranking |

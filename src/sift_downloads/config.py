@@ -261,6 +261,13 @@ class Settings:
     max_file_mb: int = 50
     extensions: frozenset[str] = DEFAULT_EXTENSIONS
 
+    # The lexical presence gate: refuse a question whose words appear in no
+    # indexed passage, before anything is embedded. An escape hatch rather than
+    # a tuning knob — the rule that decides which words may veto is fitted to a
+    # single observed failure, so a wrong refusal needs a way out that is not a
+    # downgrade. See generate.absent_terms.
+    lexical_gate: bool = True
+
     # Privacy: cloud models require an explicit opt-in, never inferred.
     allow_cloud: bool = False
 
@@ -359,6 +366,7 @@ def _from_env() -> dict:
         "min_score": _env_float("min_score"),
         "find_min_score": _env_float("find_min_score"),
         "max_file_mb": _env_int("max_file_mb"),
+        "lexical_gate": _env_bool("lexical_gate"),
         "allow_cloud": _env_bool("allow_cloud"),
     }
     values = {k: v for k, v in raw.items() if v is not None}
