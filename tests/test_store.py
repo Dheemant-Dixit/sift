@@ -156,3 +156,34 @@ def test_top_k_is_checked_before_the_empty_index_shortcut():
     query = normalize(np.array([[0.0, 0.0, 1.0]], dtype=np.float32))[0]
     with pytest.raises(ConfigError, match="at least 1"):
         VectorStore([]).search(query, k=0)
+
+
+# --- the vocabulary: the derived cache the lexical gate reads ---------------
+
+def test_the_vocabulary_holds_every_word_in_the_indexed_text():
+    store = _sample_store()
+    assert store.vocabulary == {"alpha", "beta", "gamma"}
+
+
+def test_the_vocabulary_is_built_from_the_text_that_was_embedded():
+    """Small-to-big means a record's served window is not what it matched on.
+
+    The gate answers "is this word in any indexed unit?", so it has to read
+    the same string the vector was built from.
+    """
+    record = _chunk("the whole served window", "/a.md", 0, [1.0, 0.0, 0.0])
+    record.index_text = "the embedded child"
+    assert VectorStore([record]).vocabulary == {"the", "embedded", "child"}
+
+
+def test_the_vocabulary_follows_the_records():
+    """Same bug class as the matrix: a stale cache answers for a file that
+    is no longer indexed, or misses one that just was."""
+    store = _sample_store()
+    assert "delta" not in store.vocabulary          # builds the cache
+
+    store.add([_chunk("delta", "/c.md", 0, [1.0, 1.0, 0.0])])
+    assert "delta" in store.vocabulary
+
+    store.remove_paths({"/c.md"})
+    assert "delta" not in store.vocabulary

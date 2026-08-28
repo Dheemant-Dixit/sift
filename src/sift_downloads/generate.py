@@ -10,13 +10,16 @@ document-grounded assistant:
   2. if the context doesn't contain the answer, say so,
   3. cite the source filename for each claim.
 
-And one rule the model doesn't get a vote on: if nothing retrieved clears the
-relevance bar, no model call happens at all. A prompt instruction is a request;
-this is a guarantee. It is the difference between "usually doesn't make things
-up" and "cannot make things up about documents it never saw".
+And two rules the model doesn't get a vote on. If a word in the question appears
+in none of your documents, sift refuses on the words alone, before anything is
+even embedded. If what comes back clears no relevance bar, it refuses on the
+scores. Either way no model call happens at all. A prompt instruction is a
+request; these are guarantees. It is the difference between "usually doesn't
+make things up" and "cannot make things up about documents it never saw".
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 import litellm
@@ -28,7 +31,8 @@ from sift_downloads.config import (
     validate_top_k,
     warn_if_cloud,
 )
-from sift_downloads.retrieve import search
+from sift_downloads.retrieve import get_store, search
+from sift_downloads.store import TOKEN
 
 SYSTEM_PROMPT = """You are a helpful assistant that answers questions strictly \
 from the provided context, which comes from the user's own documents.
@@ -80,6 +84,100 @@ class Answer:
             if chunk["filename"] not in seen:
                 seen.append(chunk["filename"])
         return seen
+
+
+# --- the lexical presence gate ---------------------------------------------
+#
+# `min_score` cannot tell junk from signal. Measured on a real 4,977-unit index:
+# the top-1 cosine of 20 unanswerable questions runs 0.481-0.658 and of 12
+# genuine ones 0.549-0.757, so the two groups overlap and no bar separates them.
+# The sharpest case is the string "7f3a9c2e 11b8 4d6f", which is not even a
+# question and scores 0.733 — above 11 of the 12 real ones — because an
+# identifier-shaped query pulls identifier-shaped passages with nothing
+# understood on either side. Score normalisation was measured too and is worse:
+# a z-score bar strict enough to refuse the junk keeps 0 of 12 real questions.
+#
+# A word list is the thing that works, because it asks a question a vector
+# cannot express: does this word occur in the folder AT ALL? Measured, it refuses
+# 25 of 25 unanswerable and gibberish queries while wrongly refusing 0 of 24
+# genuine ones; the 0.55 bar catches 14 of the same 25.
+#
+# Its limit is measured too, and is not hidden: on questions built from ordinary
+# document vocabulary — "passport", "parking" — it lets 7 of 14 through, because
+# the word is somewhere in the folder even when the answer is not. It is a strong
+# filter for "this question is not about your documents" and a weak one for "it
+# is about them and the answer is not there".
+
+# Only a word this long may veto. It exists for ONE measured failure: a user asks
+# for their UAN, the documents write "universal account number" out in full, the
+# letters appear nowhere, and a question sift can answer is refused. This covers
+# the lowercase spelling; `typed_as_acronym` below covers the uppercase one.
+# Both were fitted to that single case, so treat them as a starting point, and
+# look here first if a false refusal is ever reported.
+MIN_VETO_LEN = 4
+
+# The words a question is MADE OF, as opposed to words a document contains.
+# Requiring "where" to appear in your files before you may ask "where" refuses
+# everything. Deliberately generous: adding a word here only weakens the gate,
+# while leaving one out refuses a question sift could have answered. Words
+# shorter than MIN_VETO_LEN never reach this check, so none are listed.
+#
+# Hand-written. Deriving it from the corpus instead — anything appearing in most
+# units carries no signal — is the more principled version and is untested.
+GATE_STOPWORDS = frozenset({
+    "about", "again", "also", "always", "another", "anything", "aren", "been", "before",
+    "being", "both", "cannot", "come", "could", "couldn", "dear", "does", "doesn", "doing",
+    "done", "down", "during", "each", "else", "ever", "every", "find", "from", "gave", "gets",
+    "give", "given", "gives", "going", "gone", "hasn", "have", "haven", "having", "hello",
+    "help", "here", "hers", "into", "isn", "just", "keep", "kind", "know", "like", "list",
+    "long", "look", "made", "make", "many", "mean", "mine", "more", "most", "much", "must",
+    "need", "needs", "once", "only", "other", "ours", "over", "please", "said", "same",
+    "says", "shall", "should", "shouldn", "show", "shows", "some", "something", "such",
+    "sure", "take", "tell", "than", "that", "thats", "their", "them", "then", "there",
+    "these", "they", "thing", "things", "this", "those", "told", "under", "until", "using",
+    "very", "want", "wants", "wasn", "were", "what", "whats", "when", "where", "which",
+    "while", "whose", "will", "with", "without", "would", "wouldn", "your", "yours",
+})
+
+
+def absent_terms(question: str, vocabulary: frozenset[str]) -> list[str]:
+    """The words the user asked about that appear in no indexed passage.
+
+    Tokenised with the SAME regex the vocabulary was built with — a word cut one
+    way on one side and another way on the other would read as missing purely
+    because of the cut.
+
+    A word vetoes when it is absent, long enough, and was not typed as an
+    acronym. Every rule was measured on one fixed query set: "any unknown word
+    vetoes" catches all 25 junk queries but wrongly refuses 1 real one, "only if
+    every word is unknown" catches 10 of 25, and this one catches 25 of 25 while
+    wrongly refusing none.
+    """
+    typed_as_acronym = {w.lower() for w in re.findall(r"[A-Za-z]+", question)
+                        if w.isupper() and len(w) <= 5}
+    absent = [t for t in TOKEN.findall(question.lower())
+              if t not in GATE_STOPWORDS
+              and len(t) >= MIN_VETO_LEN
+              and t not in typed_as_acronym
+              and t not in vocabulary]
+    return list(dict.fromkeys(absent))   # one refusal per word, in asking order
+
+
+def _missing_word_refusal(missing: list[str], files: int) -> Answer:
+    """Refuse, and say WHICH word is missing.
+
+    Naming it is what makes a wrong refusal recoverable: the user rephrases,
+    instead of concluding the document was never indexed. Three words at most —
+    past that the message stops being a hint and starts being a word list.
+    """
+    named = [f'"{w}"' for w in missing[:3]]
+    verb = "appears" if len(named) == 1 else "appear"
+    noun = "file" if files == 1 else "files"
+    return Answer(
+        text=("I couldn't find that in your documents.\n"
+              f"  ({', '.join(named)} {verb} in none of your {files} {noun})"),
+        chunks=[], refused=True,
+    )
 
 
 def build_context_block(chunks: list[dict]) -> str:
@@ -188,6 +286,19 @@ def prepare(question: str, top_k: int | None = None, min_score: float | None = N
     # Checked here as well as in `search`, because the k handed down is
     # multiplied: without this, `--top-k -1` is refused for being -5.
     validate_top_k(top_k)
+
+    # Before the embedding call, not after it: a question about a word the folder
+    # has never contained costs nothing at all. NOT in `retrieve.search`, whose
+    # three callers ask three different questions — `find` wants file coverage
+    # and has a filename path with no passage text behind it, and `sift search`
+    # is the raw calibration tool, which cannot do its job through a filter.
+    if settings.lexical_gate:
+        store = get_store()
+        # An empty index makes every word absent, so the gate would refuse every
+        # question and blame the user's wording for an empty folder.
+        missing = absent_terms(question, store.vocabulary) if len(store) else []
+        if missing:
+            return [], _missing_word_refusal(missing, len(store.paths()))
 
     retrieved = search(question, top_k=top_k * _OVERFETCH, settings=settings)
     # Filter first, then collapse: taking the distinct passages before the bar

@@ -277,3 +277,14 @@ def test_negative_overlap_is_rejected():
     each window and the gap between them is never indexed — no error, no log."""
     with pytest.raises(ConfigError, match="negative"):
         configure(chunk_overlap=-100)
+
+
+def test_the_lexical_gate_is_on_by_default_and_can_be_turned_off(monkeypatch):
+    """The escape hatch has to reach the setting, or a false refusal leaves the
+    user nothing to do but downgrade."""
+    configure()
+    assert get_settings().lexical_gate is True
+
+    monkeypatch.setenv("SIFT_LEXICAL_GATE", "0")
+    configure()
+    assert get_settings().lexical_gate is False

@@ -30,7 +30,14 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "litellm>=1.60",
+    # Capped on 3.10 ONLY. litellm 1.98.0 ships `from typing import NotRequired`,
+    # which needs 3.11, while its own metadata still claims 3.10 support — so
+    # `import litellm` raises ImportError there and sift cannot start at all.
+    # A plain `!=1.98.0` would hold every other Python back too and would not
+    # cover a 1.98.1 with the same line in it. Lift the cap once a fixed release
+    # is out and 3.10 can install it.
+    "litellm>=1.60; python_version >= '3.11'",
+    "litellm>=1.60,<1.98; python_version < '3.11'",
     "numpy>=1.24",
     "prompt_toolkit>=3.0",
     "pypdf>=4.0",
