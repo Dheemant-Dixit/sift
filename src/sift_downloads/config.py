@@ -257,6 +257,20 @@ class Settings:
     # marginal hit there costs you a wrong answer.
     find_min_score: float = 0.40
 
+    # How much better a second passage from a file `ask` is already reading has
+    # to score than the best passage of a file it is not reading, to be worth
+    # the slot. A cosine gap, so it is MODEL-SPECIFIC in the same way
+    # `min_score` is. 0 means pure score order — one file may take every slot,
+    # which is the crowding defect. A large value means one passage per file,
+    # which cuts "summarise this book" to a single passage.
+    #
+    # 0.02 was measured, not chosen. The question it has to get right is
+    # decided by a 0.003 gap between a redundant passage and the answer, and
+    # genuine depth in one document runs 0.02-0.04 ahead of the next file. Any
+    # value in 0.01-0.04 separates those two on the folder it was measured on;
+    # 0.05 starts taking slots away from documents that had earned them.
+    repeat_margin: float = 0.02
+
     # Ingestion limits
     max_file_mb: int = 50
     extensions: frozenset[str] = DEFAULT_EXTENSIONS
@@ -365,6 +379,7 @@ def _from_env() -> dict:
         "top_k": _env_int("top_k"),
         "min_score": _env_float("min_score"),
         "find_min_score": _env_float("find_min_score"),
+        "repeat_margin": _env_float("repeat_margin"),
         "max_file_mb": _env_int("max_file_mb"),
         "lexical_gate": _env_bool("lexical_gate"),
         "allow_cloud": _env_bool("allow_cloud"),
