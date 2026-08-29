@@ -2,6 +2,117 @@
 
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org).
 
+## 0.8.0 — 2026-08-29
+
+**sift refused a question whose answer it had already found and put in front of
+the model.**
+
+Asked for an account number, sift retrieved the payslip that states it in full,
+handed that payslip to the model, and answered *"I couldn't find that in your
+documents."* Eight times out of eight. The passage was found, ranked, filtered,
+formatted and sent. Nothing about ranking was wrong.
+
+What was in the box with it was the problem: three passages of hotel booking
+boilerplate, **two of them from the same receipt**. Removing that one redundant
+passage and spending the slot on another file answered the question correctly
+eight times out of eight.
+
+```
+exactly what shipped                          0 / 8
+drop the one redundant passage                8 / 8
+keep it, add a third copy of the answer       1 / 3
+keep it, put the answer first                 0 / 3
+```
+
+More context does not help. Reordering does not help. **A redundant passage does
+not merely waste a slot — it suppresses an answer sitting below it.**
+
+### One file could take the whole context
+
+Slots were filled in pure score order, with no notion of which file a passage
+came from. The `(path, text)` collapse added in 0.6.0 cannot see this: six
+monthly payslips are six different paths. Measured over 40 real questions, **20
+gave at least 3 of 5 slots to a single file** and 17 came back with fewer than
+three distinct files.
+
+`ask` now asks one question per slot, against live scores:
+
+> Is another passage of a file I have already read worth more than the first
+> passage of a file I have not?
+
+A repeat takes the slot only if it beats the best unread file by
+`SIFT_REPEAT_MARGIN`, which defaults to 0.02. It is not a cap and not a quota,
+and it degrades correctly at both ends: set it to 0 and you have the old
+behaviour exactly; set it very high and you have one passage per file.
+
+Both simpler rules were built and measured first, and both are wrong. A cap of
+one fixes this question and cuts *"summarise this book"* down to a single passage
+of the book. A cap of two keeps the book readable and does **not** fix the
+question. Strict round-robin needs no constant and fixes the question, but it is
+score-blind — over 18 single-source questions it gave the answering document
+*fewer* slots than plain score order in nine of them.
+
+The margin reverses that rather than merely avoiding it. Asked for the terms of a
+separation, the one document holding the answer now keeps all five slots, where
+score order gave it two.
+
+### The model can read your file names now
+
+Six payslips on a real folder name their employer **nowhere in their text** —
+only in the file name. sift already showed the model that name in every
+`[Source: ...]` label, and the model could not use it: asked which company, it
+named the payroll bank instead, confidently and wrongly.
+
+File names are now also spelled out as words in the label, and the prompt says a
+file name is evidence. Both halves were needed — each alone scored 0 out of 4,
+and together 4 out of 4. The answer is now a correct hedge: *"the file names
+mention linkedin, though it is not explicitly stated in the text."*
+
+### Questions whose words are in none of your documents are refused up front
+
+Also in this release, previously unreleased: `ask` keeps a vocabulary beside the
+index and checks your question against it **before embedding anything**. If a
+word is in none of your documents, sift refuses and names that word, rather than
+answering from whatever happened to score highest.
+
+This exists because the relevance bar cannot tell junk from signal. On a real
+index the string `7f3a9c2e 11b8 4d6f` scores 0.733 — above 11 of 12 genuine
+questions — because an identifier-shaped query pulls identifier-shaped passages
+with nothing understood on either side. The unanswerable and the real score bands
+overlap, so no bar separates them.
+
+A word vetoes only when it is absent, four characters or longer, and was not
+typed as an acronym. `SIFT_LEXICAL_GATE=0` turns it off if it refuses something
+it should answer.
+
+**Nothing to re-index.** The index format is unchanged, so upgrading costs
+nothing.
+
+### What this does not fix
+
+- **"What was my salary at linkedin" still fails.** A payslip does not contain
+  the word *salary* — it says Earnings, Basic, Net Pay — so the passage holding
+  the figure ranks 17th. No slot-selection rule can reach a passage the ranking
+  never surfaced. This needs query expansion or sub-word matching.
+- **And the obvious fix for it is a trap.** The payslips write the bank as one
+  word, `HDFCBANK`, so the token `hdfc` exists in the index *only* in unrelated
+  hotel receipts. A keyword channel on your "HDFC" would score the distractors up
+  and the answer not at all — strengthening the exact failure this release
+  removes.
+- **File names still do not affect ranking.** The model can now read a name it
+  was given; sift still cannot *find* a file by one. That is a second constant
+  competing with cosine on an unrelated scale, and it wants its own calibration.
+- **`repeat_margin` was measured on one folder and does not transfer.** It is a
+  cosine gap, so it is model-specific in exactly the way `min_score` is.
+  Re-measure it if you change the embedding model.
+- **The relevance bar is unchanged.** `min_score` stays 0.55.
+- **Ties are still arbitrary.** Passages scoring identically are ordered by index
+  row, which is the order files were indexed in.
+- **Still no `SIGTERM` handling** — the open roadmap item from 0.3.0.
+
+731 unit tests and 26 answer-quality evals, on Linux, macOS and Windows across
+Python 3.10 to 3.14.
+
 ## 0.7.0 — 2026-08-22
 
 **Asking a question meant watching an empty screen, then losing your prompt.**

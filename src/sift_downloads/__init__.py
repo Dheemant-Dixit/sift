@@ -29,7 +29,7 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 from sift_downloads.config import Settings, configure, get_settings
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 __all__ = [
     "Settings", "configure", "get_settings",
