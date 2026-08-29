@@ -149,6 +149,43 @@ callers want the opposite: `find` groups hits by file and wants coverage, and
 `sift search` shows raw index rows for calibrating `--min-score`, which a
 filtered view cannot do.
 
+**Collapsing repeats is not enough: one file could still take every slot.**
+Slots were filled in pure score order with no notion of where a passage came
+from, so six monthly payslips — six different paths, so invisible to the
+`(path, text)` collapse — could fill the context with one paragraph. Over 40
+real questions, 20 gave at least 3 of 5 slots to a single file and 17 came back
+with fewer than 3 distinct files.
+
+That is not a complaint about variety. Asked for an account number, `ask`
+retrieved two hotel receipts' booking boilerplate — two passages of it from the
+*same* receipt — plus two payslips carrying the answer in full, and the model
+answered "I couldn't find that in your documents" 8 times out of 8. Dropping the
+one redundant receipt passage and spending the slot elsewhere answered it
+correctly 8 times out of 8. A redundant passage does not merely waste a slot; it
+suppresses an answer sitting below it.
+
+So `_spread_across_files` runs last, and it asks one question per slot: **is
+another passage of a file the model has already read worth more than the first
+passage of a file it has not?** A repeat is taken only if it beats the best
+unread file by `repeat_margin`. The failing question was decided by a 0.003 gap,
+and genuine depth in one document runs 0.02–0.04 ahead of the next file, which
+is the separation the constant is set on.
+
+A cap and a round-robin were both built and measured and both are wrong. A
+per-file cap of 1 fixes the question and cuts "summarise this book" to a single
+passage of the book; a cap of 2 keeps the book and does *not* fix the question,
+because the second receipt passage is the one doing the damage. Strict
+round-robin needs no constant and fixes the question, but it is score-blind — it
+hands round one to a file at 0.56 as readily as to one at 0.72, and over 18
+single-source questions it gave the answer-bearing file *fewer* slots than plain
+score order in 9 of them. The margin reverses that: asked for the terms of a
+separation, the answering document keeps all five slots where score order gave
+it two.
+
+The rule degrades correctly at both ends with no special cases. Set the margin
+to 0 and it is exactly score order; set it very high and it is a per-file cap of
+one. Every useful setting is between two behaviours the code already expresses.
+
 ---
 
 ## Why the store looks the way it does

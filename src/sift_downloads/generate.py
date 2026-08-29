@@ -31,6 +31,7 @@ from sift_downloads.config import (
     validate_top_k,
     warn_if_cloud,
 )
+from sift_downloads.find import tokenize
 from sift_downloads.retrieve import get_store, search
 from sift_downloads.store import TOKEN
 
@@ -41,6 +42,8 @@ Rules:
 - Use ONLY the information in the CONTEXT. Do not use outside knowledge.
 - If the context does not contain the answer, say "I couldn't find that in your \
 documents." Do not guess.
+- A passage's file name is evidence too. If the words in it answer the question \
+and the passage text does not, say so and name what the file name says.
 - Be concise."""
 
 # Placed AFTER the context, in the user turn, on purpose. Retrieved passages can
@@ -180,6 +183,36 @@ def _missing_word_refusal(missing: list[str], files: int) -> Answer:
     )
 
 
+def spell_out(filename: str) -> str:
+    """A file name rewritten as words, for a model to read.
+
+    `payslip_5_2026_linkedin.pdf` becomes `payslip 5 2026 linkedin`. The
+    extension goes because it says nothing about the contents; everything else
+    stays, including the digits, because a year or a month often IS the answer
+    to "which one".
+
+    This is not decoration. Six payslips in a real folder name their employer
+    only in the file name — the text inside never does — so "which company was
+    it?" is unanswerable from the passage alone. Handed the raw file name in
+    the [Source: ...] label, llama3.1:8b named the employer 0 times out of 4,
+    even when the prompt told it file names were evidence. Handed the same name
+    spelled out as words, WITH that rule, it named it 4 times out of 4. Neither
+    half works alone: spelled out without the rule was also 0 of 4. The model
+    can read `linkedin` out of a sentence and cannot read it out of a path.
+
+    `tokenize` is `find`'s, deliberately. A file name is broken into words in
+    exactly one place, so `sift find` and `sift ask` cannot come to disagree
+    about what a file is called.
+
+    Returns "" when spelling the name out changes nothing — `notes.md` is
+    already words. The label is prompt text the model pays attention to, so a
+    field that restates its neighbour is not free.
+    """
+    stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+    words = " ".join(tokenize(stem))
+    return "" if words == stem.lower() else words
+
+
 def build_context_block(chunks: list[dict]) -> str:
     """Format retrieved chunks into a labeled context block.
 
@@ -201,6 +234,9 @@ def build_context_block(chunks: list[dict]) -> str:
     for chunk in chunks:
         head = chunk.get("doc_head") or ""
         label = f"[Source: {chunk['filename']}"
+        words = spell_out(chunk["filename"])
+        if words:
+            label += f' | File name reads: "{words}"'
         if head:
             label += f' | Document begins: "{head}..."'
         parts.append(f"{label}]\n{chunk['text']}")
@@ -219,8 +255,8 @@ def build_context_block(chunks: list[dict]) -> str:
 _OVERFETCH = 5
 
 
-def _distinct_passages(chunks: list[dict], top_k: int) -> list[dict]:
-    """Keep the best-scoring chunk per SERVED passage, re-ranked from 1.
+def _distinct_passages(chunks: list[dict]) -> list[dict]:
+    """Keep the best-scoring chunk per SERVED passage.
 
     Two chunks can carry the same served text for two unrelated reasons: one
     passage indexed once per child (2.77 times on a real folder of 4,977 units),
@@ -236,9 +272,10 @@ def _distinct_passages(chunks: list[dict], top_k: int) -> list[dict]:
     served passage is what the model actually reads, so it is what has to be
     unique. Chunks sharing a child but not a passage are kept, deliberately.
 
-    Returning fewer than `top_k` is correct when the index holds fewer distinct
-    passages than that. Padding it back out could only mean repeating text the
-    model has already been given.
+    It collapses repeats and nothing else. Choosing WHICH of the survivors the
+    model reads is `_spread_across_files`' job, and the two are kept apart
+    because they answer different questions: "has the model read this text?"
+    and "has it read anything but this file?".
 
     The key is (path, text) and NOT text alone. Two files can hold the same
     passage — two revisions of a CV, 9 of 101 duplicate groups on a real index —
@@ -263,12 +300,75 @@ def _distinct_passages(chunks: list[dict], top_k: int) -> list[dict]:
         if key in seen:
             continue
         seen.add(key)
-        # `rank` is a position in the results, so it has to close up over a
-        # dropped row rather than leave a hole where a copy used to be.
-        chunk["rank"] = len(kept) + 1
         kept.append(chunk)
-        if len(kept) == top_k:
-            break
+    return kept
+
+
+def _spread_across_files(chunks: list[dict], top_k: int, margin: float) -> list[dict]:
+    """Take passages in score order, but make a REPEAT earn its slot.
+
+    Walking down the scores, a passage from a file that already holds a slot is
+    taken only if it beats the best passage of some file with no slot yet by
+    `margin`. Otherwise the unused file goes first. Re-ranked from 1.
+
+    WHY THIS EXISTS. Score order alone lets one file take the whole context.
+    Measured on a real 4,984-unit index over 40 questions, 20 of them handed at
+    least 3 of 5 slots to a single file and 17 came back with fewer than 3
+    distinct files. That is not a cosmetic complaint about variety. Asked "what
+    is my HDFC account number?", sift retrieved three passages of booking
+    boilerplate from two hotel receipts — two of them from the SAME receipt —
+    plus two payslips that carry the answer in full, and llama3.1:8b answered
+    "I couldn't find that in your documents" 8 times out of 8. Dropping the one
+    redundant receipt passage and spending the slot on another file answered it
+    correctly 8 times out of 8. The passage was always there; the repetition
+    around it is what buried it.
+
+    A MARGIN, NOT A CAP, AND NOT ROUND-ROBIN. Both simpler rules were measured
+    and both are wrong.
+
+    A per-file CAP breaks the opposite case. A cap of 1 fixes the question
+    above and cuts "summarise this book" down to a single passage of the book,
+    where five passages of one file is exactly right. A cap of 2 keeps the book
+    readable and does NOT fix the question — 1 correct answer out of 6 —
+    because the second hotel passage is the one doing the damage.
+
+    Strict ROUND-ROBIN — every file's best, then every file's second best —
+    fixes the question and needs no constant, but it is score-blind: it hands
+    the first round to a file at 0.56 as readily as to one at 0.72. Measured
+    over 18 single-source questions it gave the answer-bearing file fewer slots
+    than plain score order in 9 of them, worst case 5 slots down to 2, because
+    a weakly relevant file that scrapes over `min_score` collects a slot it has
+    not earned.
+
+    The margin fixes both, because it asks the question those two only
+    approximate: is another passage of a file I have already read worth more
+    than the first passage of a file I have not? On the question above the
+    answer was decided by 0.003 — a redundant booking-terms passage at 0.616
+    against a payslip at 0.613. Nothing about that gap says the repeat is worth
+    more. Where depth really is worth more the gap is not close: asked for the
+    terms of a separation, that document's passages beat the next file by 0.02
+    to 0.04 and it keeps all five slots — MORE than plain score order gives it,
+    which spent two of them on unrelated files that happened to sit between.
+    """
+    kept: list[dict] = []
+    used: set[str] = set()
+    remaining = list(chunks)                      # arrives in score order
+
+    while remaining and len(kept) < top_k:
+        best = remaining[0]
+        if best["path"] in used:
+            fresh = next((c for c in remaining if c["path"] not in used), None)
+            if fresh is not None and best["score"] - fresh["score"] < margin:
+                best = fresh
+        kept.append(best)
+        used.add(best["path"])
+        remaining.remove(best)
+
+    # `rank` is a position in the results, so it is assigned here, after the
+    # order is final — not upstream, where it would describe the score order
+    # this function just replaced.
+    for position, chunk in enumerate(kept, 1):
+        chunk["rank"] = position
     return kept
 
 
@@ -301,9 +401,12 @@ def prepare(question: str, top_k: int | None = None, min_score: float | None = N
             return [], _missing_word_refusal(missing, len(store.paths()))
 
     retrieved = search(question, top_k=top_k * _OVERFETCH, settings=settings)
-    # Filter first, then collapse: taking the distinct passages before the bar
-    # is applied would spend slots on passages that are about to be dropped.
-    chunks = _distinct_passages([c for c in retrieved if c["score"] >= min_score], top_k)
+    # Filter, then collapse, then spread. The bar comes first because taking
+    # the distinct passages before it would spend slots on passages that are
+    # about to be dropped; the spread comes last because it can only choose
+    # between passages that survived both.
+    survivors = _distinct_passages([c for c in retrieved if c["score"] >= min_score])
+    chunks = _spread_across_files(survivors, top_k, settings.repeat_margin)
 
     # Nothing relevant means no model call at all. The near-miss is reported so
     # that a bar set too high looks like a bar set too high, rather than like an

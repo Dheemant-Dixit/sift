@@ -571,3 +571,102 @@ def test_a_word_asked_for_twice_is_named_once(indexed, no_retrieval, no_model):
     indexed("the quarterly revenue report")
     result = answer("quidditch, and more quidditch")
     assert result.text.count("quidditch") == 1
+
+
+# --- crowding: one file must not take the whole context ---------------------
+#
+# The defect: `ask` filled all five slots from as few as one file. Measured on a
+# real index over 40 questions, 20 handed 3+ of 5 slots to a single file. Asked
+# for an account number, sift retrieved three passages of booking boilerplate —
+# two of them from the SAME receipt — and two payslips holding the answer, and
+# llama3.1:8b refused 8 times out of 8. Removing the redundant receipt passage
+# answered it 8 times out of 8.
+#
+# Three ways to get the fix wrong, one test each. A per-file CAP of 1 fixes this
+# and guts "summarise this book". A cap of 2 keeps the book and does NOT fix
+# this. Strict ROUND-ROBIN fixes both and is score-blind, so a weakly relevant
+# file steals a slot from the document that actually answers the question.
+
+
+def sourced(text, filename, score):
+    """A retrieved chunk, identified by the file it came from."""
+    return {"filename": filename, "path": f"/src/{filename}",
+            "text": text, "index_text": text, "score": score}
+
+
+def test_a_repeat_passage_does_not_beat_a_new_file_by_a_hair(retrieved):
+    """The measured failure: 0.616 vs 0.613 cost the answer.
+
+    `b.pdf` has already been read once. Its second passage is worth 0.003 more
+    than the first passage of `c.pdf`, which nothing has read. That gap does not
+    say the repeat is worth more, so the new file takes the slot.
+    """
+    retrieved["chunks"] = [sourced("B ONE", "b.pdf", 0.647),
+                           sourced("B TWO", "b.pdf", 0.616),
+                           sourced("C ONE", "c.pdf", 0.613)]
+    chunks, _ = prepare("q", top_k=2)
+    assert [c["filename"] for c in chunks] == ["b.pdf", "c.pdf"], \
+        "a redundant passage displaced the file holding the answer"
+
+
+def test_a_clearly_better_file_still_keeps_every_slot(retrieved):
+    """The opposite failure, which a per-file cap causes.
+
+    Here depth really is worth more: every passage of `book.pdf` beats the other
+    file by far more than the margin. Asked to summarise a book, five passages
+    of that book is the right answer, not one.
+    """
+    retrieved["chunks"] = [sourced("B1", "book.pdf", 0.858),
+                           sourced("B2", "book.pdf", 0.855),
+                           sourced("B3", "book.pdf", 0.840),
+                           sourced("B4", "book.pdf", 0.836),
+                           sourced("B5", "book.pdf", 0.835),
+                           sourced("OTHER", "other.pdf", 0.560)]
+    chunks, _ = prepare("q", top_k=5)
+    assert [c["filename"] for c in chunks] == ["book.pdf"] * 5, \
+        "a cap took slots from the one document that answers the question"
+
+
+def test_a_weak_new_file_does_not_steal_a_slot(retrieved):
+    """What strict round-robin gets wrong, and why the margin is a margin.
+
+    `weak.pdf` scrapes over the bar. Round-robin would hand it the second slot
+    because it is a file nothing has read. It has not earned one: the second
+    passage of `strong.pdf` beats it by more than the margin.
+    """
+    retrieved["chunks"] = [sourced("S1", "strong.pdf", 0.711),
+                           sourced("S2", "strong.pdf", 0.671),
+                           sourced("W1", "weak.pdf", 0.560)]
+    chunks, _ = prepare("q", top_k=2)
+    assert [c["filename"] for c in chunks] == ["strong.pdf", "strong.pdf"], \
+        "a barely-relevant file took a slot from the document being read"
+
+
+def test_the_slots_are_still_ranked_from_one(retrieved):
+    """Reordering must renumber. `rank` is a position, not an id."""
+    retrieved["chunks"] = [sourced("B ONE", "b.pdf", 0.647),
+                           sourced("B TWO", "b.pdf", 0.616),
+                           sourced("C ONE", "c.pdf", 0.613)]
+    chunks, _ = prepare("q", top_k=3)
+    assert [c["rank"] for c in chunks] == [1, 2, 3]
+
+
+# --- the file name as evidence ---------------------------------------------
+
+
+def test_a_file_name_is_spelled_out_for_the_model():
+    """Six payslips name their employer only in the file name.
+
+    Measured against llama3.1:8b: handed the raw name it named the employer 0
+    times out of 4, handed the same name as words (with the prompt rule) 4 out
+    of 4.
+    """
+    assert generate.spell_out("payslip_5_2026_linkedin.pdf") == "payslip 5 2026 linkedin"
+    assert generate.spell_out("RentalAgreement.PDF") == "rental agreement"
+
+
+def test_a_file_name_that_is_already_words_is_not_restated():
+    """The label is prompt text. A field repeating its neighbour is not free."""
+    assert generate.spell_out("notes.md") == ""
+    block = build_context_block([{"filename": "notes.md", "text": "body"}])
+    assert block == "[Source: notes.md]\nbody"

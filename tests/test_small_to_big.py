@@ -147,7 +147,8 @@ def test_the_document_head_reaches_the_model():
     }])
 
     assert "Form 16 Employee Name: RIVER OKONKWO" in block
-    assert "[Source: 239277_2025-26.pdf | Document begins:" in block
+    assert '[Source: 239277_2025-26.pdf | File name reads: "239277 2025 26" ' \
+           '| Document begins:' in block
 
 
 def test_a_chunk_without_a_head_still_renders_a_plain_source_label():
