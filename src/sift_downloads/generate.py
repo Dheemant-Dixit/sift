@@ -82,11 +82,7 @@ class Answer:
     @property
     def sources(self) -> list[str]:
         """De-duplicated source filenames, in the order they were retrieved."""
-        seen: list[str] = []
-        for chunk in self.chunks:
-            if chunk["filename"] not in seen:
-                seen.append(chunk["filename"])
-        return seen
+        return list(dict.fromkeys(chunk["filename"] for chunk in self.chunks))
 
 
 # --- the lexical presence gate ---------------------------------------------

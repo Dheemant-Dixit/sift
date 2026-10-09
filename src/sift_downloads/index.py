@@ -375,12 +375,11 @@ def rebuild_index(settings: Settings | None = None,
     neither can be applied retroactively to vectors already on disk.
     """
     settings = settings or get_settings()
-    settings.index_path.unlink(missing_ok=True)
-    settings.manifest_path.unlink(missing_ok=True)
-    # Not redundant with the invalidation inside update_index: on an empty source
-    # folder there is nothing to save, so that one never runs and the cache would
-    # keep serving the store we just deleted.
-    invalidate_store_cache()
+    # purge_index also drops the store cache. That is not redundant with the
+    # invalidation inside update_index: on an empty source folder there is
+    # nothing to save, so that one never runs and the cache would keep serving
+    # the store we just deleted.
+    purge_index(settings)
     return update_index(settings, embedder)
 
 

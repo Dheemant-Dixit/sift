@@ -62,32 +62,22 @@ def _clip(text: str, room: int) -> str:
 # an implementation that draws in the region above the box instead.
 
 
-class Status:
-    """A transient one-liner. `update` replaces it in place."""
-
-    def __init__(self, region: Region, message: str):
-        self._region = region
-        self.update(message)
-
-    def update(self, message: str) -> None:
-        self._region.show(message)
-
-
 class Region:
     """Where work-in-progress is drawn. Three methods, and that is the contract.
 
     `status` is a context manager so the caller reads the way `console.status`
-    did. `append`/`flush` accumulate a streaming answer.
+    did; it yields the region, so `show` replaces the line in place.
+    `append`/`flush` accumulate a streaming answer.
     """
 
     def show(self, message: str) -> None:
         raise NotImplementedError
 
     @contextmanager
-    def status(self, message: str) -> Iterator[Status]:
-        handle = Status(self, message)
+    def status(self, message: str) -> Iterator[Region]:
+        self.show(message)
         try:
-            yield handle
+            yield self
         finally:
             self.show("")
 
@@ -269,14 +259,12 @@ class Ui:
         if not chunks:
             return
         self.console.print()
-        seen: list[str] = []
-        for chunk in chunks:
-            tag = (f"{chunk['filename']} "
-                   f"[dim](chunk {chunk['chunk_index']}, {chunk['score']:.2f})[/dim]")
-            if tag not in seen:
-                seen.append(tag)
+        tags = dict.fromkeys(
+            f"{chunk['filename']} "
+            f"[dim](chunk {chunk['chunk_index']}, {chunk['score']:.2f})[/dim]"
+            for chunk in chunks)
         self.console.print(f"  [dim]— {heading} —[/dim]")
-        for tag in seen:
+        for tag in tags:
             self.console.print(f"    [dim]•[/dim] {tag}")
 
 
@@ -323,15 +311,13 @@ def _do_ask(ui: Ui, request: Request) -> None:
         first = next(tokens, None)
 
     ui.console.print()
-    body = first or ""
     if first:
         ui.region.append(first)
     for delta in tokens:
-        body += delta
         ui.region.append(delta)
     ui.region.flush()
 
-    if not body.strip():
+    if not stream.text.strip():
         ui.note("(the model returned nothing)")
     ui.console.print()
 
@@ -420,7 +406,7 @@ def _offer_setup(ui: Ui) -> None:
     with ui.region.status("downloading...") as status:
         for model in plan.to_pull:
             try:
-                pull_model(model, lambda p: status.update(
+                pull_model(model, lambda p: status.show(
                     f"{p.model} — {p.status} "
                     f"{human_size(p.completed)} / {human_size(p.total)}"))
             except SetupError as e:
@@ -458,42 +444,27 @@ def dispatch(ui: Ui, request: Request) -> bool:
     """Run one request. Returns False when the session should end."""
     if request.command == UiCommand.QUIT:
         return False
-    if request.command == UiCommand.NOTHING:
-        return True
-    if request.command == UiCommand.ERROR:
-        ui.error(request.message)
-        return True
-    if request.command == UiCommand.HELP:
-        ui.help()
-        return True
-    if request.command == UiCommand.FIND:
-        _do_find(ui, request)
-        return True
-    if request.command == UiCommand.ASK:
-        _do_ask(ui, request)
-        return True
-    if request.command in (UiCommand.OPEN, UiCommand.REVEAL):
-        _do_open(ui, request, reveal=request.command == UiCommand.REVEAL)
-        return True
-    if request.command == UiCommand.SYNC:
-        _do_sync(ui)
-        return True
-    if request.command == UiCommand.STATUS:
-        _do_status(ui)
-        return True
+    handler = _HANDLERS.get(request.command)
+    if handler:
+        handler(ui, request)
     return True
+
+
+_HANDLERS = {
+    UiCommand.ERROR: lambda ui, r: ui.error(r.message),
+    UiCommand.HELP: lambda ui, r: ui.help(),
+    UiCommand.FIND: _do_find,
+    UiCommand.ASK: _do_ask,
+    UiCommand.OPEN: lambda ui, r: _do_open(ui, r, reveal=False),
+    UiCommand.REVEAL: lambda ui, r: _do_open(ui, r, reveal=True),
+    UiCommand.SYNC: lambda ui, r: _do_sync(ui),
+    UiCommand.STATUS: lambda ui, r: _do_status(ui),
+}
 
 
 # ---------------------------------------------------------------------------
 # The loop
 # ---------------------------------------------------------------------------
-
-def _start_terminal(ui: Ui) -> int:
-    """Imported here, not at module scope: terminal.py imports this module."""
-    from sift_downloads.terminal import run_session
-
-    return run_session(ui)
-
 
 def run(settings: Settings | None = None) -> int:
     """Start an interactive session. Returns a process exit code.
@@ -510,6 +481,8 @@ def run(settings: Settings | None = None) -> int:
     _offer_setup(ui)
     _do_sync(ui, quiet=True)
 
-    code = _start_terminal(ui)
+    # Imported here, not at module scope: terminal.py imports this module.
+    from sift_downloads.terminal import TerminalSession
+    code = TerminalSession(ui).run_forever()
     ui.console.print("  [dim]bye[/dim]")
     return code

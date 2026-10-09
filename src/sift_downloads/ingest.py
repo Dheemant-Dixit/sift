@@ -130,7 +130,7 @@ def load_document(path: Path, password: str | None = None) -> tuple[dict | None,
     """
     extractor = EXTRACTORS.get(path.suffix.lower())
     if extractor is None:
-        return None, "unsupported type"
+        return None, REASON_UNSUPPORTED
     try:
         # Only PDFs can be locked, so only extract_pdf takes a password.
         raw = extract_pdf(path, password) if extractor is extract_pdf else extractor(path)

@@ -31,7 +31,6 @@ from sift_downloads.terminal import (
     LiveRegion,
     Scrollback,
     TerminalSession,
-    run_session,
 )
 from sift_downloads.ui import Ui
 
@@ -1325,15 +1324,3 @@ def test_a_worker_commit_after_the_run_ends_neither_hangs_nor_is_lost():
         assert terminal.loop is None
     finally:
         stopped.close()
-
-
-def test_run_session_hands_over_the_ui_the_caller_already_has(monkeypatch):
-    """TerminalSession replaces the console and region ON the Ui it is given. A
-    second Ui built here would leave ui.py's original one writing straight at
-    the terminal, past the renderer drawing the box."""
-    seen = []
-    monkeypatch.setattr(TerminalSession, "run_forever",
-                        lambda self: seen.append(self.ui) or 7)
-    ui = Ui(Session())
-    assert run_session(ui) == 7
-    assert seen == [ui]
