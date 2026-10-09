@@ -101,7 +101,7 @@ def _cwidth(text: str) -> int:
     """Terminal columns `text` occupies. A CJK ideograph or emoji is 2, not 1 -
     len() counts code points, and a row measured that way is silently twice
     the real budget for any such text, so the terminal wraps it after all."""
-    return sum(get_cwidth(ch) for ch in text)
+    return get_cwidth(text)
 
 
 def _fit(text: str, room: int) -> int:
@@ -714,8 +714,3 @@ class TerminalSession:
         while True:
             await asyncio.sleep(SPINNER_INTERVAL)
             self.region.tick()
-
-
-def run_session(ui: Ui) -> int:
-    """Hand the terminal to a persistent Application until the user leaves."""
-    return TerminalSession(ui).run_forever()

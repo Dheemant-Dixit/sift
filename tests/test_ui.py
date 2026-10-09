@@ -86,7 +86,7 @@ def test_a_plain_region_does_not_accumulate_progress_updates(screen):
     before = screen.read()
     with screen.region.status("downloading...") as status:
         for done in range(0, 500, 50):
-            status.update(f"llama3.1 — pulling {done}MB / 500MB")
+            status.show(f"llama3.1 — pulling {done}MB / 500MB")
     assert screen.read() == before
 
 
@@ -233,12 +233,6 @@ class FakeStream:
 
     def __iter__(self):
         return iter(self._deltas)
-
-    def finish(self):
-        from sift_downloads.generate import Answer
-        if self.refusal is not None:
-            return self.refusal
-        return Answer(text=self.text, chunks=self.chunks)
 
 
 def test_a_refusal_is_shown_and_nothing_is_streamed(screen, monkeypatch):
@@ -521,29 +515,31 @@ def test_the_session_offers_setup_before_it_tries_to_sync(monkeypatch):
 
     Both of those run BEFORE the Application starts, which is why read_line and
     the plain rich console survive untouched for that phase.
+
+    Only run_forever is stubbed, so the real import of terminal.py executes
+    here: renaming TerminalSession used to leave the whole suite green while
+    every real session died at startup on the ImportError. And TerminalSession
+    replaces the console and region ON the Ui it is given, so it must be the
+    same Ui the banner and the first sync drew on - a second one would leave
+    the original writing straight at the terminal, past the box.
     """
+    from prompt_toolkit.application import create_app_session
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from sift_downloads import terminal as terminal_module
     from sift_downloads.config import get_settings
     done: list[str] = []
-    monkeypatch.setattr(ui_module, "_offer_setup", lambda ui: done.append("offer"))
+    uis: list[Ui] = []
+    monkeypatch.setattr(ui_module, "_offer_setup",
+                        lambda ui: uis.append(ui) or done.append("offer"))
     monkeypatch.setattr(ui_module, "_do_sync", lambda ui, quiet=False: done.append("sync"))
-    monkeypatch.setattr(ui_module, "_start_terminal",
-                        lambda ui: done.append("terminal") or 0)
+    monkeypatch.setattr(terminal_module.TerminalSession, "run_forever",
+                        lambda self: uis.append(self.ui) or done.append("terminal") or 3)
 
-    assert ui_module.run(get_settings()) == 0
+    # The real TerminalSession swaps ui.console for its own, so "bye" is painted
+    # by prompt_toolkit. Give it an output: a Windows runner has no console.
+    with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
+        assert ui_module.run(get_settings()) == 3
     assert done == ["offer", "sync", "terminal"]
-
-
-def test_the_session_really_reaches_the_terminal_module(monkeypatch):
-    """The one function whose entire job is the import direction, and the only
-    place it is executed. Every other test stubs `_start_terminal` out, so
-    renaming `run_session` in terminal.py used to leave the whole suite green
-    while every real session died at startup on the ImportError.
-    """
-    from sift_downloads import terminal as terminal_module
-
-    seen = []
-    monkeypatch.setattr(terminal_module, "run_session",
-                        lambda ui: seen.append(ui) or 3)
-    ui = Ui(Session())
-    assert ui_module._start_terminal(ui) == 3
-    assert seen == [ui], "the caller's Ui was not the one handed over"
+    assert uis[0] is uis[1], "the caller's Ui was not the one handed over"
