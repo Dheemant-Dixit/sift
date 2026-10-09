@@ -523,6 +523,10 @@ def test_the_session_offers_setup_before_it_tries_to_sync(monkeypatch):
     same Ui the banner and the first sync drew on - a second one would leave
     the original writing straight at the terminal, past the box.
     """
+    from prompt_toolkit.application import create_app_session
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
     from sift_downloads import terminal as terminal_module
     from sift_downloads.config import get_settings
     done: list[str] = []
@@ -533,6 +537,9 @@ def test_the_session_offers_setup_before_it_tries_to_sync(monkeypatch):
     monkeypatch.setattr(terminal_module.TerminalSession, "run_forever",
                         lambda self: uis.append(self.ui) or done.append("terminal") or 3)
 
-    assert ui_module.run(get_settings()) == 3
+    # The real TerminalSession swaps ui.console for its own, so "bye" is painted
+    # by prompt_toolkit. Give it an output: a Windows runner has no console.
+    with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
+        assert ui_module.run(get_settings()) == 3
     assert done == ["offer", "sync", "terminal"]
     assert uis[0] is uis[1], "the caller's Ui was not the one handed over"
