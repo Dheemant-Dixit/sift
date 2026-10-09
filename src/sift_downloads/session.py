@@ -8,8 +8,7 @@ ui.py is then only responsible for drawing.
 
 v1 is stateless between queries: each line is answered on its own. The one
 thing carried across is `last_hits`, because `/open 2` has to know what "2"
-referred to. `history` is recorded but not yet fed to the model — that is the
-seam where conversational follow-ups drop in later without reshaping anything.
+referred to.
 """
 from __future__ import annotations
 
@@ -130,17 +129,6 @@ class Session:
 
     settings: Settings = field(default_factory=get_settings)
     last_hits: list = field(default_factory=list)
-    history: list[tuple[str, str]] = field(default_factory=list)  # (role, text)
-    synced: bool = False
-
-    def remember(self, role: str, text: str) -> None:
-        """Record a turn.
-
-        Unused by v1's prompting — every question is answered on its own. It
-        exists so that turning this into a conversation is a change to how the
-        prompt is built, not a change to the shape of the session.
-        """
-        self.history.append((role, text))
 
     def resolve(self, index: int | None) -> tuple[Path | None, str]:
         """Map a result number from the last search to a path.

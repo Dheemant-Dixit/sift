@@ -20,8 +20,6 @@ from sift_downloads.config import configure, get_settings
 from sift_downloads.ingest import (
     extract_docx,
     is_indexable,
-    iter_source_files,
-    load_documents,
     scan_source,
 )
 
@@ -231,33 +229,6 @@ def test_a_docx_is_indexable(source_dir):
     document.save(path)
     settled(path)
     assert indexable(path)[0]
-
-
-# --- the convenience wrappers ----------------------------------------------
-
-def test_iter_source_files_yields_paths(make_file):
-    make_file("a.md", "alpha")
-    make_file("b.txt", "beta")
-    names = sorted(p.name for p in iter_source_files())
-    assert names == ["a.md", "b.txt"]
-
-
-def test_iter_source_files_collapses_duplicates(make_file):
-    make_file("statement.md", "identical bytes")
-    make_file("statement (1).md", "identical bytes")
-    assert len(list(iter_source_files())) == 1
-
-
-def test_load_documents_skips_what_it_cannot_read(make_file, make_pdf):
-    make_file("readable.md", "text here")
-    make_pdf("scanned.pdf", text="")
-    docs = load_documents()
-    assert [d["filename"] for d in docs] == ["readable.md"]
-
-
-def test_load_documents_returns_the_text(make_file):
-    make_file("notes.md", "the quick brown fox")
-    assert load_documents()[0]["text"] == "the quick brown fox"
 
 
 # --- files that vanish between the two passes of the scan -------------------

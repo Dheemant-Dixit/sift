@@ -206,8 +206,3 @@ def chunk_one(doc: dict, settings: Settings | None = None) -> list[dict]:
                 "doc_head": head,
             })
     return records
-
-
-def chunk_documents(documents: list[dict], settings: Settings | None = None) -> list[dict]:
-    """Flatten a list of documents into a single list of chunk records."""
-    return [rec for doc in documents for rec in chunk_one(doc, settings)]

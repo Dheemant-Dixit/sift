@@ -224,13 +224,6 @@ def test_find_is_dispatched_and_remembers_the_hits(screen, monkeypatch):
     assert len(screen.session.last_hits) == 1
 
 
-def test_find_records_the_query_in_history(screen, monkeypatch):
-    import sift_downloads.find as find
-    monkeypatch.setattr(find, "find_files", lambda *a, **k: [])
-    dispatch(screen, Request(UiCommand.FIND, argument="lease"))
-    assert ("user", "lease") in screen.session.history
-
-
 # --- asking -----------------------------------------------------------------
 
 class FakeStream:
@@ -291,13 +284,6 @@ def test_an_empty_answer_is_called_out_rather_than_shown_as_blank(screen, monkey
     assert "returned nothing" in screen.read()
 
 
-def test_the_answer_is_remembered(screen, monkeypatch):
-    import sift_downloads.generate as generate
-    monkeypatch.setattr(generate, "AnswerStream", lambda *a, **k: FakeStream(["hi"]))
-    dispatch(screen, Request(UiCommand.ASK, argument="q"))
-    assert ("assistant", "hi") in screen.session.history
-
-
 # --- opening ----------------------------------------------------------------
 
 def test_open_launches_the_resolved_file(screen, monkeypatch):
@@ -342,7 +328,6 @@ def test_sync_reports_what_changed(screen, monkeypatch):
                         lambda s: SyncStats(added=2, chunks_total=30))
     dispatch(screen, Request(UiCommand.SYNC))
     assert "+2 added" in screen.read()
-    assert screen.session.synced is True
 
 
 def test_sync_says_up_to_date_when_nothing_changed(screen, monkeypatch):

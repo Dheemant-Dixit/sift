@@ -292,7 +292,6 @@ def _do_find(ui: Ui, request: Request) -> None:
         hits = find_files(request.argument, limit=10, recent_first=request.recent,
                           settings=session.settings)
     session.last_hits = hits
-    session.remember("user", request.argument)
     ui.results(hits, request.argument)
 
 
@@ -300,7 +299,6 @@ def _do_ask(ui: Ui, request: Request) -> None:
     from sift_downloads.generate import AnswerStream
 
     session = ui.session
-    session.remember("user", request.argument)
 
     with ui.region.status("reading your files..."):
         stream = AnswerStream(request.argument, settings=session.settings)
@@ -335,8 +333,6 @@ def _do_ask(ui: Ui, request: Request) -> None:
 
     if not body.strip():
         ui.note("(the model returned nothing)")
-    answer = stream.finish()
-    session.remember("assistant", answer.text)
     ui.console.print()
 
 
@@ -373,7 +369,6 @@ def _do_sync(ui: Ui, quiet: bool = False) -> None:
         ui.error(f"could not refresh the index ({type(e).__name__}: {first})")
         log.debug("sync failed", exc_info=True)
         return
-    ui.session.synced = True
     if stats.upgraded:
         # Announced even in quiet mode: the sync just took a minute instead of a
         # second, and silence would read as a hang.

@@ -147,7 +147,7 @@ def load_document(path: Path, password: str | None = None) -> tuple[dict | None,
         return None, REASON_NO_TEXT
 
     return {"path": str(path), "filename": path.name,
-            "text": text, "num_chars": len(text)}, ""
+            "text": text}, ""
 
 
 # ---------------------------------------------------------------------------
@@ -286,15 +286,3 @@ def scan_source(settings: Settings | None = None) -> ScanResult:
             break
 
     return ScanResult(files=keep, duplicates=duplicates, skipped=skipped, deferred=deferred)
-
-
-def iter_source_files(settings: Settings | None = None):
-    """Yield the indexable files in the source folder (duplicates collapsed)."""
-    for path_str in scan_source(settings).files:
-        yield Path(path_str)
-
-
-def load_documents(settings: Settings | None = None) -> list[dict]:
-    """Extract text from every indexable file (skipping failures)."""
-    return [doc for path in iter_source_files(settings)
-            if (doc := load_document(path)[0])]

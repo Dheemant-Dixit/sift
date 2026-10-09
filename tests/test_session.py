@@ -143,14 +143,6 @@ def test_resolve_is_one_based_and_bounded():
     assert "1 result" in session.resolve(2)[1]
 
 
-def test_history_is_recorded_for_later_use():
-    """v1 doesn't prompt with history, but it records it so v2 can."""
-    session = Session()
-    session.remember("user", "find my lease")
-    session.remember("assistant", "here it is")
-    assert session.history == [("user", "find my lease"), ("assistant", "here it is")]
-
-
 def test_help_covers_every_documented_command():
     documented = " ".join(keys for keys, _ in HELP)
     for command in ("/ask", "/open", "/reveal", "/sync", "/status", "/help", "/quit"):

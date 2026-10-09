@@ -80,7 +80,7 @@ def test_chunk_size_comes_from_settings_at_call_time(tmp_path):
 
 def test_chunk_one_carries_provenance():
     doc = {"path": "/downloads/lease.pdf", "filename": "lease.pdf",
-           "text": "clause " * 500, "num_chars": 3000}
+           "text": "clause " * 500}
     records = chunk_one(doc)
     assert len(records) > 1
     assert all(r["path"] == "/downloads/lease.pdf" for r in records)
