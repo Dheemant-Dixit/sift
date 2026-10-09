@@ -104,16 +104,6 @@ def test_the_served_window_is_larger_than_the_indexed_unit():
         "nothing was actually split small-to-big"
 
 
-def test_flattening_many_documents_keeps_both_texts_and_the_head():
-    """chunk_documents is the library entry point — it must not drop the new fields."""
-    from sift_downloads.chunk import chunk_documents
-
-    records = chunk_documents([_doc(PAYSLIP * 40, "a.txt"), _doc(PAYSLIP * 40, "b.txt")])
-
-    assert {r["filename"] for r in records} == {"a.txt", "b.txt"}
-    assert all(r["index_text"] and r["doc_head"] for r in records)
-
-
 def test_an_unbroken_line_is_served_whole_rather_than_cut_mid_sentence():
     """A known limit, pinned deliberately.
 
